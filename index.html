@@ -665,13 +665,13 @@
             <!-- 報價單頂部表頭 -->
             <div class="doc-header flex justify-between items-start border-b-2 border-slate-900 pb-3.5 mb-4">
               <div class="max-w-[60%]">
-                <h1 id="prev-sellerName" class="doc-seller-title text-[20px] font-bold text-slate-900 tracking-wide">星辰雲端科技有限公司</h1>
+                <h1 id="prev-sellerName" class="doc-seller-title text-[20px] font-bold text-slate-900 tracking-wide"></h1>
                 <div class="mt-1.5 text-[11.5px] text-slate-600 space-y-0.5 leading-snug">
-                  <p id="prev-sellerTaxIdRow">統一編號：<span id="prev-sellerTaxId" class="font-num font-medium text-slate-800">54889912</span></p>
+                  <p id="prev-sellerTaxIdRow">統一編號：<span id="prev-sellerTaxId" class="font-num font-medium text-slate-800">-</span></p>
                   <p>
-                    <span id="prev-sellerPhoneRow">電話：<span id="prev-sellerPhone" class="font-num">(02) 2700-1234</span></span>
+                    <span id="prev-sellerPhoneRow">電話：<span id="prev-sellerPhone" class="font-num">-</span></span>
                     <span id="prev-sellerEmailSep" class="mx-1.5 text-slate-300">|</span>
-                    <span id="prev-sellerEmailRow">信箱：<span id="prev-sellerEmail" class="font-num">sales@example.com.tw</span></span>
+                    <span id="prev-sellerEmailRow">信箱：<span id="prev-sellerEmail" class="font-num">-</span></span>
                   </p>
                 </div>
               </div>
@@ -684,7 +684,7 @@
                 <table class="ml-auto text-[11.5px] text-slate-700">
                   <tr>
                     <td class="text-slate-500 pr-2 py-0.5 text-right">報價日期：</td>
-                    <td id="prev-quoteDate" class="font-num font-medium text-right">2026-11-19</td>
+                    <td id="prev-quoteDate" class="font-num font-medium text-right">-</td>
                   </tr>
                 </table>
               </div>
@@ -693,13 +693,13 @@
             <!-- 客戶（買方）資訊（無底框，雙欄網格對齊：左欄統編/電話，右欄聯絡窗口/公司地址） -->
             <div class="doc-buyer mb-4 pb-3 border-b border-slate-200 space-y-1">
               <p class="text-slate-900">
-                <span class="text-[12px] font-semibold text-slate-500">客戶資訊：</span><span class="font-bold text-[15px]" id="prev-buyerName">宏達精密工業股份有限公司</span>
+                <span class="text-[12px] font-semibold text-slate-500">客戶資訊：</span><span class="font-bold text-[15px]" id="prev-buyerName"></span>
               </p>
               <div class="grid grid-cols-12 gap-x-4 gap-y-1 text-[12px] text-slate-600">
-                <div class="col-span-4"><span class="text-slate-500">統一編號：</span><span id="prev-buyerTaxId" class="font-num text-slate-800">22334455</span></div>
-                <div class="col-span-8"><span class="text-slate-500">聯絡窗口：</span><span id="prev-buyerContact" class="text-slate-800">林雅婷 採購專員</span></div>
-                <div class="col-span-4"><span class="text-slate-500">聯絡電話：</span><span id="prev-buyerPhone" class="font-num text-slate-800">(04) 2359-8888</span></div>
-                <div class="col-span-8"><span class="text-slate-500">公司地址：</span><span id="prev-buyerAddress" class="text-slate-800">台中市西屯區工業區一路88號</span></div>
+                <div class="col-span-4"><span class="text-slate-500">統一編號：</span><span id="prev-buyerTaxId" class="font-num text-slate-800">-</span></div>
+                <div class="col-span-8"><span class="text-slate-500">聯絡窗口：</span><span id="prev-buyerContact" class="text-slate-800">-</span></div>
+                <div class="col-span-4"><span class="text-slate-500">聯絡電話：</span><span id="prev-buyerPhone" class="font-num text-slate-800">-</span></div>
+                <div class="col-span-8"><span class="text-slate-500">公司地址：</span><span id="prev-buyerAddress" class="text-slate-800">-</span></div>
               </div>
             </div>
 
@@ -2074,6 +2074,43 @@ function jsonResponse(obj) {
     /**
      * 範例資料載入與表單重設
      */
+    function initBlankForm() {
+      document.getElementById('quoteNo').value = generateDefaultQuoteNo();
+      document.getElementById('quoteDate').value = getFormattedDate(0);
+
+      // 買方欄位預設全部清空
+      document.getElementById('buyerName').value = '';
+      document.getElementById('buyerTaxId').value = '';
+      document.getElementById('buyerContact').value = '';
+      document.getElementById('buyerPhone').value = '';
+      document.getElementById('buyerAddress').value = '';
+
+      // 若本機無記憶的賣方資料，確保賣方所有欄位預設皆為空白
+      if (!loadSellerFromStorage()) {
+        [
+          'sellerName',
+          'sellerTaxId',
+          'sellerContact',
+          'sellerPhone',
+          'sellerEmail',
+          'bankName',
+          'bankAccountName',
+          'bankAccountNo'
+        ].forEach(id => {
+          const el = document.getElementById(id);
+          if (el) el.value = '';
+        });
+      }
+
+      appState.items = [{ name: '', spec: '', qty: 1, unit: '式', price: 0 }];
+      document.getElementById('taxMode').value = 'exclusive';
+      document.getElementById('discountAmount').value = 0;
+      document.getElementById('notes').value = '';
+
+      renderItemsEditor();
+      syncState();
+    }
+
     function loadSampleData(isInitial = false) {
       document.getElementById('quoteNo').value = generateDefaultQuoteNo();
       document.getElementById('quoteDate').value = getFormattedDate(0);
@@ -2844,8 +2881,7 @@ function jsonResponse(obj) {
     window.addEventListener('DOMContentLoaded', () => {
       migrateLegacyCloudStorage();
       bindHistoryListDelegation();
-      loadSellerFromStorage();
-      loadSampleData(true); // 初始化載入預設商業範本，方便立即體驗
+      initBlankForm(); // 預設以空白表單啟動（買賣方預設皆為空白；賣方若已有本機記憶則自動帶入）
       updateHistoryBadge();
       updateCloudStatusIndicator();
       setupDragAndDrop();

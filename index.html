@@ -1,0 +1,2858 @@
+<!DOCTYPE html>
+<html lang="zh-Hant-TW">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <!-- CSP 防護：限制 fetch/XHR 外送目標僅限同源與 Google Apps Script，阻斷非法外洩與插件載入 -->
+  <meta http-equiv="Content-Security-Policy" content="connect-src 'self' https://script.google.com https://script.googleusercontent.com; object-src 'none'; base-uri 'none';" />
+  <title>企業級單頁式報價單系統 | Enterprise Quotation System</title>
+
+  <!--
+    Tailwind Play CDN（單檔原型與展示用；正式生產環境建議透過 Tailwind CLI 建置精簡 CSS 並自架，
+    以移除動態執行階段腳本並搭配完整 SRI 驗證）
+  -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- Google Fonts: Noto Sans TC & JetBrains Mono -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Noto+Sans+TC:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+
+  <!-- Font Awesome Icons 6.5.1 (含 SRI 完整性雜湊驗證) -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" integrity="sha512-DTOQO9RWCH3ppGqcWaEA1BIZOC6xxalwEsw9c2QQeAIftl+Vegovlnee1c9QX4TctnWMn13TZye+giMm8e2LwA==" crossorigin="anonymous" referrerpolicy="no-referrer" />
+
+  <!-- PapaParse 5.4.1 (CSV 解析與生成，含 SRI 驗證) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js" integrity="sha512-dfX5uYVXzyU8+KHqj8bjo7UkOdg18PaOtpa48djpNbZHwExddghZ+ZmzWT06R5v6NSk3ZUfsH6FNEDepLx9hPQ==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+
+  <!-- SheetJS xlsx 0.20.3 (已修補 CVE-2023-30533 原型污染與 CVE-2024-22363 ReDoS，含 SRI 驗證) -->
+  <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js" integrity="sha384-EnyY0/GSHQGSxSgMwaIPzSESbqoOLSexfnSMN2AP+39Ckmn92stwABZynq1JyzdT" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+
+  <!-- html2pdf.js 0.10.1 (高解析度 PDF 匯出，含 SRI 驗證) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js" integrity="sha512-GsLlZN/3F2ErC5ifS5QtgpiJtWd43JWSuIgh7mbzZ8zBps+dvLusV+eNQATqgA/HdeKFVgA5v3S/cIrLF7QnIg==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['"Noto Sans TC"', 'sans-serif'],
+            mono: ['"JetBrains Mono"', '"Noto Sans TC"', 'monospace'],
+          },
+          colors: {
+            brand: {
+              50: '#eff6ff',
+              100: '#dbeafe',
+              600: '#2563eb',
+              700: '#1d4ed8',
+              800: '#1e40af',
+              900: '#1e3a8a',
+            }
+          }
+        }
+      }
+    };
+  </script>
+
+  <style>
+    /* 全域字體與捲軸優化 */
+    body {
+      font-family: 'Noto Sans TC', sans-serif;
+      background-color: #f1f5f9;
+      color: #0f172a;
+    }
+
+    .font-num {
+      font-family: 'JetBrains Mono', 'Noto Sans TC', monospace;
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* 自訂細緻捲軸 */
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: #f1f5f9;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #cbd5e1;
+      border-radius: 9999px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: #94a3b8;
+    }
+
+    /* A4 紙張標準尺寸定義 (210mm x 297mm) */
+    .a4-paper {
+      width: 210mm;
+      min-height: 297mm;
+      background: #ffffff;
+      box-shadow: 0 20px 25px -5px rgba(15, 23, 42, 0.1), 0 8px 10px -6px rgba(15, 23, 42, 0.08);
+      box-sizing: border-box;
+      position: relative;
+      transform-origin: top center;
+    }
+
+    /* 避免明細列在分頁時被腰斬 */
+    .avoid-break {
+      break-inside: avoid;
+      page-break-inside: avoid;
+    }
+
+    /* 量測實際內容高度用（暫時解除 min-height，精準計算行數與高度） */
+    .a4-paper.measuring {
+      min-height: 0 !important;
+      height: auto !important;
+    }
+
+    /* =================================================================
+       智慧版面密度階梯（依據實際行高自動切換，不限制項次數量）
+       1. 預設：標準舒適間距
+       2. density-compact：中密度緊湊（約可容納 11~16 項單行明細於同一頁）
+       3. density-tight：高密度單頁（約可容納 17~24 項單行明細於同一頁）
+       ================================================================= */
+    .a4-paper.density-compact {
+      padding: 9mm 10mm !important;
+    }
+    .a4-paper.density-compact .doc-header {
+      padding-bottom: 0.55rem !important;
+      margin-bottom: 0.65rem !important;
+    }
+    .a4-paper.density-compact .doc-buyer {
+      padding-bottom: 0.5rem !important;
+      margin-bottom: 0.65rem !important;
+    }
+    .a4-paper.density-compact .doc-table-wrap {
+      margin-bottom: 0.5rem !important;
+    }
+    .a4-paper.density-compact .doc-table {
+      font-size: 11.5px !important;
+    }
+    .a4-paper.density-compact .doc-table th {
+      padding-top: 0.35rem !important;
+      padding-bottom: 0.35rem !important;
+    }
+    .a4-paper.density-compact .doc-table td {
+      padding-top: 0.25rem !important;
+      padding-bottom: 0.25rem !important;
+    }
+    .a4-paper.density-compact .doc-item-spec {
+      font-size: 10.5px !important;
+      margin-top: 1px !important;
+    }
+    .a4-paper.density-compact .doc-bottom-wrap {
+      padding-top: 0.5rem !important;
+    }
+    .a4-paper.density-compact .doc-summary-grid {
+      margin-bottom: 0.5rem !important;
+    }
+    .a4-paper.density-compact .doc-summary-table td {
+      padding-top: 0.3rem !important;
+      padding-bottom: 0.3rem !important;
+    }
+    .a4-paper.density-compact .doc-notes-box {
+      padding: 0.55rem !important;
+    }
+    .a4-paper.density-compact .doc-notes-text {
+      line-height: 1.45 !important;
+      min-height: 32px !important;
+    }
+
+    .a4-paper.density-tight {
+      padding: 8mm 9.5mm !important;
+    }
+    .a4-paper.density-tight .doc-header {
+      padding-bottom: 0.4rem !important;
+      margin-bottom: 0.5rem !important;
+    }
+    .a4-paper.density-tight .doc-seller-title {
+      font-size: 18px !important;
+    }
+    .a4-paper.density-tight .doc-buyer {
+      padding-bottom: 0.4rem !important;
+      margin-bottom: 0.5rem !important;
+    }
+    .a4-paper.density-tight .doc-table-wrap {
+      margin-bottom: 0.4rem !important;
+    }
+    .a4-paper.density-tight .doc-table {
+      font-size: 10.5px !important;
+      line-height: 1.3 !important;
+    }
+    .a4-paper.density-tight .doc-table th {
+      padding-top: 0.25rem !important;
+      padding-bottom: 0.25rem !important;
+    }
+    .a4-paper.density-tight .doc-table td {
+      padding-top: 0.16rem !important;
+      padding-bottom: 0.16rem !important;
+    }
+    .a4-paper.density-tight .doc-item-spec {
+      font-size: 9.5px !important;
+      line-height: 1.25 !important;
+      margin-top: 0 !important;
+    }
+    .a4-paper.density-tight .doc-bottom-wrap {
+      padding-top: 0.35rem !important;
+    }
+    .a4-paper.density-tight .doc-summary-grid {
+      margin-bottom: 0.35rem !important;
+    }
+    .a4-paper.density-tight .doc-summary-table {
+      font-size: 11px !important;
+    }
+    .a4-paper.density-tight .doc-summary-table td {
+      padding-top: 0.2rem !important;
+      padding-bottom: 0.2rem !important;
+    }
+    .a4-paper.density-tight .doc-notes-box {
+      padding: 0.45rem !important;
+    }
+    .a4-paper.density-tight .doc-notes-text {
+      font-size: 10px !important;
+      line-height: 1.38 !important;
+      min-height: 24px !important;
+    }
+    .a4-paper.density-tight .doc-footer-line {
+      padding-top: 0.35rem !important;
+      font-size: 10px !important;
+    }
+
+    /* PDF 匯出專用：單頁時貼齊底部且保留安全緩衝避免溢頁；多頁時解除固定高度自然換頁 */
+    .pdf-mode {
+      width: 190mm !important;
+      max-width: 190mm !important;
+      min-height: 272mm !important;
+      padding: 0 !important;
+      box-shadow: none !important;
+      transform: none !important;
+      box-sizing: border-box !important;
+    }
+    .pdf-mode.is-multipage {
+      min-height: auto !important;
+    }
+    thead { display: table-header-group; }
+    tr { break-inside: avoid; page-break-inside: avoid; }
+
+    /* 列印專用樣式 (@media print) */
+    @media print {
+      @page {
+        size: A4 portrait;
+        margin: 10mm;
+      }
+      html, body {
+        width: 100% !important;
+        height: auto !important;
+        background: #ffffff !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        overflow: visible !important;
+        -webkit-print-color-adjust: exact !important;
+        print-color-adjust: exact !important;
+      }
+      .no-print {
+        display: none !important;
+      }
+      main {
+        display: block !important;
+        max-width: none !important;
+        width: 100% !important;
+        min-height: auto !important;
+        margin: 0 !important;
+        padding: 0 !important;
+      }
+      #preview-wrapper {
+        padding: 0 !important;
+        margin: 0 !important;
+        width: 100% !important;
+        overflow: visible !important;
+        background: #ffffff !important;
+        display: block !important;
+      }
+      #a4-scale-container {
+        display: block !important;
+        transform: none !important;
+        width: 100% !important;
+        height: auto !important;
+        margin: 0 !important;
+        padding: 0 !important;
+      }
+      .a4-paper {
+        width: 100% !important;
+        max-width: 100% !important;
+        min-height: 272mm !important;
+        box-shadow: none !important;
+        padding: 0 !important;
+        margin: 0 !important;
+        overflow: visible !important;
+      }
+      .a4-paper.is-multipage {
+        min-height: auto !important;
+      }
+    }
+  </style>
+</head>
+<body class="antialiased selection:bg-brand-100 selection:text-brand-900">
+
+  <!-- =====================================================================
+       頂部導覽列 (列印時自動隱藏)
+       ===================================================================== -->
+  <header class="no-print sticky top-0 z-40 bg-slate-900 text-white border-b border-slate-800 shadow-md">
+    <div class="max-w-[1800px] mx-auto px-4 sm:px-6 py-3 flex flex-wrap items-center justify-between gap-3">
+      <!-- 系統標題與品牌識別 -->
+      <div class="flex items-center gap-3">
+        <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center shadow-inner">
+          <i class="fa-solid fa-file-invoice-dollar text-lg text-white"></i>
+        </div>
+        <div>
+          <div class="flex items-center gap-2">
+            <h1 class="text-base sm:text-lg font-bold tracking-tight">企業級單頁式報價單系統</h1>
+            <span class="hidden sm:inline-block text-[11px] font-medium px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-400/30">
+              Secured Pro
+            </span>
+          </div>
+          <p class="text-xs text-slate-400 hidden sm:block">支援 Excel/CSV 批次匯入・台灣營業稅自動核算・高畫質 PDF / CSV 匯出</p>
+        </div>
+      </div>
+
+      <!-- 全域操作按鈕列 -->
+      <div class="flex flex-wrap items-center gap-2">
+        <button type="button" onclick="saveCurrentQuotation()" class="px-3.5 py-2 text-xs sm:text-sm font-semibold rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white shadow-sm transition flex items-center gap-1.5" title="儲存至本機並同步至 Google 試算表">
+          <i class="fa-solid fa-floppy-disk"></i>
+          <span>儲存報價單</span>
+        </button>
+
+        <button type="button" onclick="toggleHistoryDrawer(true)" class="px-3 py-2 text-xs sm:text-sm font-medium rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition flex items-center gap-1.5 relative" title="開啟歷史報價單管理">
+          <i class="fa-solid fa-clock-rotate-left text-sky-400"></i>
+          <span>歷史紀錄</span>
+          <span id="history-count-badge" class="ml-0.5 px-1.5 py-0.2 text-[11px] font-num font-bold rounded-full bg-sky-500/20 text-sky-300 border border-sky-400/30">0</span>
+        </button>
+
+        <button type="button" onclick="openCloudModal()" class="px-3 py-2 text-xs sm:text-sm font-medium rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition flex items-center gap-1.5" title="設定 Google 試算表雲端同步">
+          <span id="cloud-status-dot" class="w-2 h-2 rounded-full bg-slate-500"></span>
+          <i class="fa-solid fa-cloud text-emerald-400"></i>
+          <span class="hidden md:inline">雲端同步</span>
+        </button>
+
+        <div class="h-6 w-px bg-slate-700 mx-0.5 hidden sm:block"></div>
+
+        <button type="button" onclick="loadSampleData()" class="px-3 py-2 text-xs sm:text-sm font-medium rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition flex items-center gap-1.5" title="載入完整範例報價單">
+          <i class="fa-solid fa-wand-magic-sparkles text-amber-400"></i>
+          <span class="hidden lg:inline">載入範例</span>
+        </button>
+
+        <button type="button" onclick="confirmResetForm()" class="px-3 py-2 text-xs sm:text-sm font-medium rounded-lg bg-slate-800 hover:bg-rose-950/70 text-slate-200 hover:text-rose-300 border border-slate-700 hover:border-rose-800 transition flex items-center gap-1.5" title="清空目前報價單內容">
+          <i class="fa-solid fa-rotate-left text-rose-400"></i>
+          <span class="hidden lg:inline">清空重填</span>
+        </button>
+
+        <div class="h-6 w-px bg-slate-700 mx-0.5 hidden sm:block"></div>
+
+        <button type="button" onclick="exportToCSV()" class="px-3.5 py-2 text-xs sm:text-sm font-medium rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white shadow-sm transition flex items-center gap-1.5">
+          <i class="fa-solid fa-file-csv"></i>
+          <span>匯出 CSV</span>
+        </button>
+
+        <button type="button" id="btn-export-pdf" onclick="exportToPDF()" class="px-3.5 py-2 text-xs sm:text-sm font-medium rounded-lg bg-blue-600 hover:bg-blue-500 text-white shadow-sm transition flex items-center gap-1.5">
+          <i class="fa-solid fa-file-pdf"></i>
+          <span>匯出 PDF</span>
+        </button>
+
+        <button type="button" onclick="window.print()" class="px-3.5 py-2 text-xs sm:text-sm font-medium rounded-lg bg-slate-700 hover:bg-slate-600 text-white border border-slate-600 transition flex items-center gap-1.5" title="使用瀏覽器原生列印">
+          <i class="fa-solid fa-print"></i>
+          <span class="hidden xl:inline">直接列印</span>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- =====================================================================
+       主工作區：響應式雙欄配置 (左側編輯控制面板 + 右側即時 A4 預覽區)
+       ===================================================================== -->
+  <main class="max-w-[1800px] mx-auto flex flex-col xl:flex-row min-h-[calc(100vh-65px)]">
+
+    <!-- ===================================================================
+         左側／上方：編輯控制面板 (no-print)
+         =================================================================== -->
+    <section class="no-print w-full xl:w-[540px] 2xl:w-[600px] shrink-0 bg-white border-b xl:border-b-0 xl:border-r border-slate-200 xl:h-[calc(100vh-65px)] xl:overflow-y-auto p-4 sm:p-6 space-y-5">
+
+      <!-- 1. 報價單基本資訊 -->
+      <div class="bg-slate-50/80 rounded-xl border border-slate-200/90 p-4 shadow-sm">
+        <div class="flex items-center justify-between mb-3">
+          <h2 class="text-sm font-bold text-slate-800 flex items-center gap-2">
+            <span class="w-6 h-6 rounded-md bg-blue-100 text-blue-700 flex items-center justify-center text-xs">
+              <i class="fa-regular fa-calendar"></i>
+            </span>
+            報價單基本資訊
+          </h2>
+        </div>
+
+        <input type="hidden" id="quoteNo" />
+        <div class="grid grid-cols-1 gap-3">
+          <div>
+            <label class="block text-xs font-medium text-slate-600 mb-1">報價日期</label>
+            <input type="date" id="quoteDate" oninput="debouncedSyncState()" class="w-full px-3 py-2 text-sm font-num bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition" />
+          </div>
+        </div>
+      </div>
+
+      <!-- 2. 我方（賣方）資訊 - 本機瀏覽器自動記憶（含明文提醒與手動清除） -->
+      <details open class="group bg-slate-50/80 rounded-xl border border-slate-200/90 p-4 shadow-sm">
+        <summary class="list-none cursor-pointer flex items-center justify-between">
+          <div class="flex items-center gap-2">
+            <span class="w-6 h-6 rounded-md bg-indigo-100 text-indigo-700 flex items-center justify-center text-xs">
+              <i class="fa-solid fa-building"></i>
+            </span>
+            <h2 class="text-sm font-bold text-slate-800">我方（賣方）公司資訊</h2>
+            <span class="text-[11px] px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 font-medium">
+              <i class="fa-solid fa-laptop mr-0.5"></i>本機記憶
+            </span>
+          </div>
+          <i class="fa-solid fa-chevron-down text-xs text-slate-400 group-open:rotate-180 transition-transform"></i>
+        </summary>
+
+        <div class="mt-3.5 pt-3 border-t border-slate-200/80 space-y-3">
+          <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div class="sm:col-span-2">
+              <label class="block text-xs font-medium text-slate-600 mb-1">公司名稱</label>
+              <input type="text" id="sellerName" oninput="handleSellerInput()" class="w-full px-3 py-2 text-sm bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none" placeholder="例：星辰雲端科技有限公司" />
+            </div>
+            <div>
+              <label class="block text-xs font-medium text-slate-600 mb-1">統一編號</label>
+              <input type="text" id="sellerTaxId" maxlength="8" oninput="handleSellerInput()" class="w-full px-3 py-2 text-sm font-num bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none" placeholder="8碼統編" />
+            </div>
+          </div>
+
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label class="block text-xs font-medium text-slate-600 mb-1">業務聯絡人</label>
+              <input type="text" id="sellerContact" oninput="handleSellerInput()" class="w-full px-3 py-2 text-sm bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none" placeholder="例：陳志明 業務經理" />
+            </div>
+            <div>
+              <label class="block text-xs font-medium text-slate-600 mb-1">聯絡電話 / 分機</label>
+              <input type="text" id="sellerPhone" oninput="handleSellerInput()" class="w-full px-3 py-2 text-sm font-num bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none" placeholder="例：(02) 2700-1234 #108" />
+            </div>
+          </div>
+
+          <div>
+            <label class="block text-xs font-medium text-slate-600 mb-1">電子信箱</label>
+            <input type="email" id="sellerEmail" oninput="handleSellerInput()" class="w-full px-3 py-2 text-sm bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none" placeholder="sales@example.com.tw" />
+          </div>
+
+          <!-- 匯款帳戶資訊（本機明文提示） -->
+          <div class="bg-white p-3 rounded-lg border border-slate-200 space-y-2.5">
+            <div class="flex flex-wrap items-center justify-between gap-2">
+              <div class="text-xs font-semibold text-slate-700 flex items-center gap-1.5">
+                <i class="fa-solid fa-landmark text-slate-500"></i> 匯款帳戶資訊（選填，僅隨歷史報價存檔）
+              </div>
+              <button type="button" onclick="clearSavedSellerStorage()" class="text-[11px] text-rose-600 hover:underline">
+                清除本機賣方記憶
+              </button>
+            </div>
+            <p class="text-[11px] text-slate-500">
+              <i class="fa-solid fa-circle-info text-slate-400 mr-1"></i>提醒：賣方資料以明文儲存在本機瀏覽器 localStorage，若使用共用電腦請於離席前點擊「清除本機賣方記憶」。
+            </p>
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+              <div>
+                <label class="block text-[11px] text-slate-500 mb-0.5">銀行名稱與代碼</label>
+                <input type="text" id="bankName" oninput="handleSellerInput()" class="w-full px-2.5 py-1.5 text-xs bg-slate-50 border border-slate-300 rounded-md focus:ring-2 focus:ring-blue-500 outline-none" placeholder="玉山銀行 (808) 信義分行" />
+              </div>
+              <div>
+                <label class="block text-[11px] text-slate-500 mb-0.5">匯款戶名</label>
+                <input type="text" id="bankAccountName" oninput="handleSellerInput()" class="w-full px-2.5 py-1.5 text-xs bg-slate-50 border border-slate-300 rounded-md focus:ring-2 focus:ring-blue-500 outline-none" placeholder="星辰雲端科技有限公司" />
+              </div>
+              <div>
+                <label class="block text-[11px] text-slate-500 mb-0.5">匯款帳號</label>
+                <input type="text" id="bankAccountNo" oninput="handleSellerInput()" class="w-full px-2.5 py-1.5 text-xs font-num bg-slate-50 border border-slate-300 rounded-md focus:ring-2 focus:ring-blue-500 outline-none" placeholder="0123-940-056789" />
+              </div>
+            </div>
+          </div>
+        </div>
+      </details>
+
+      <!-- 3. 客戶（買方）資訊 -->
+      <details open class="group bg-slate-50/80 rounded-xl border border-slate-200/90 p-4 shadow-sm">
+        <summary class="list-none cursor-pointer flex items-center justify-between">
+          <div class="flex items-center gap-2">
+            <span class="w-6 h-6 rounded-md bg-teal-100 text-teal-700 flex items-center justify-center text-xs">
+              <i class="fa-solid fa-user-tie"></i>
+            </span>
+            <h2 class="text-sm font-bold text-slate-800">客戶（買方）資訊</h2>
+          </div>
+          <i class="fa-solid fa-chevron-down text-xs text-slate-400 group-open:rotate-180 transition-transform"></i>
+        </summary>
+
+        <div class="mt-3.5 pt-3 border-t border-slate-200/80 space-y-3">
+          <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div class="sm:col-span-2">
+              <label class="block text-xs font-medium text-slate-600 mb-1">客戶公司 / 單位名稱</label>
+              <input type="text" id="buyerName" oninput="debouncedSyncState()" class="w-full px-3 py-2 text-sm bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none" placeholder="例：宏達精密工業股份有限公司" />
+            </div>
+            <div>
+              <label class="block text-xs font-medium text-slate-600 mb-1">客戶統一編號</label>
+              <input type="text" id="buyerTaxId" maxlength="8" oninput="debouncedSyncState()" class="w-full px-3 py-2 text-sm font-num bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none" placeholder="8碼統編" />
+            </div>
+          </div>
+
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label class="block text-xs font-medium text-slate-600 mb-1">客戶聯絡人</label>
+              <input type="text" id="buyerContact" oninput="debouncedSyncState()" class="w-full px-3 py-2 text-sm bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none" placeholder="例：林雅婷 採購專員" />
+            </div>
+            <div>
+              <label class="block text-xs font-medium text-slate-600 mb-1">聯絡電話</label>
+              <input type="text" id="buyerPhone" oninput="debouncedSyncState()" class="w-full px-3 py-2 text-sm font-num bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none" placeholder="例：(04) 2359-8888" />
+            </div>
+          </div>
+
+          <div>
+            <label class="block text-xs font-medium text-slate-600 mb-1">客戶地址</label>
+            <input type="text" id="buyerAddress" oninput="debouncedSyncState()" class="w-full px-3 py-2 text-sm bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none" placeholder="台中市西屯區工業區一路88號" />
+          </div>
+        </div>
+      </details>
+
+      <!-- 4. 報價明細管理（手動輸入 + CSV/Excel 批次匯入） -->
+      <div class="bg-slate-50/80 rounded-xl border border-slate-200/90 p-4 shadow-sm space-y-3.5">
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <h2 class="text-sm font-bold text-slate-800 flex items-center gap-2">
+            <span class="w-6 h-6 rounded-md bg-amber-100 text-amber-700 flex items-center justify-center text-xs">
+              <i class="fa-solid fa-list-check"></i>
+            </span>
+            報價明細項目
+            <span id="item-count-badge" class="text-xs font-num px-2 py-0.5 rounded-full bg-slate-200 text-slate-700">0 項</span>
+          </h2>
+
+          <div class="flex items-center gap-2">
+            <button type="button" onclick="toggleImportPanel()" class="px-2.5 py-1.5 text-xs font-medium rounded-lg bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 transition flex items-center gap-1.5">
+              <i class="fa-solid fa-file-import text-blue-600"></i>
+              <span>批次匯入 CSV / Excel</span>
+            </button>
+            <button type="button" onclick="addItem()" class="px-3 py-1.5 text-xs font-semibold rounded-lg bg-blue-600 hover:bg-blue-700 text-white shadow-sm transition flex items-center gap-1">
+              <i class="fa-solid fa-plus"></i>
+              <span>新增明細列</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- 批次匯入抽屜區塊 -->
+        <div id="import-panel" class="hidden bg-white rounded-xl border border-blue-200 p-3.5 space-y-3 shadow-inner">
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <span class="text-xs font-bold text-blue-900 flex items-center gap-1.5">
+              <i class="fa-solid fa-table"></i> 支援 .csv、.xlsx、.xls（上限 2MB / 500 筆）
+            </span>
+            <button type="button" onclick="downloadImportTemplate()" class="text-xs font-medium text-emerald-700 hover:text-emerald-800 bg-emerald-50 hover:bg-emerald-100 px-2.5 py-1 rounded-md border border-emerald-200 transition flex items-center gap-1">
+              <i class="fa-solid fa-download"></i> 下載 CSV 匯入範本
+            </button>
+          </div>
+
+          <!-- 匯入模式選擇 -->
+          <div class="flex flex-wrap items-center gap-4 text-xs text-slate-700 bg-slate-50 px-3 py-2 rounded-lg border border-slate-200">
+            <span class="font-semibold text-slate-600">匯入方式：</span>
+            <label class="inline-flex items-center gap-1.5 cursor-pointer">
+              <input type="radio" name="importMode" value="append" checked class="text-blue-600 focus:ring-blue-500" />
+              <span>附加至現有明細後方</span>
+            </label>
+            <label class="inline-flex items-center gap-1.5 cursor-pointer">
+              <input type="radio" name="importMode" value="replace" class="text-blue-600 focus:ring-blue-500" />
+              <span>覆蓋現有明細</span>
+            </label>
+          </div>
+
+          <!-- 拖放與選檔區域 -->
+          <div id="drop-zone" onclick="document.getElementById('file-input').click()" class="border-2 border-dashed border-blue-300 hover:border-blue-500 bg-blue-50/40 hover:bg-blue-50 rounded-xl p-4 text-center cursor-pointer transition">
+            <input type="file" id="file-input" accept=".csv,.xlsx,.xls" class="hidden" onchange="handleFileSelect(event)" />
+            <i class="fa-solid fa-cloud-arrow-up text-2xl text-blue-500 mb-1.5"></i>
+            <p class="text-xs font-medium text-slate-700">點擊選擇檔案，或將 <span class="font-bold text-blue-700">.csv / .xlsx</span> 拖曳至此處</p>
+            <p class="text-[11px] text-slate-500 mt-1">標準欄位順序：品名, 規格說明, 數量, 單位, 單價</p>
+          </div>
+        </div>
+
+        <!-- 單位建議選項 (datalist) -->
+        <datalist id="unit-options">
+          <option value="式"></option>
+          <option value="組"></option>
+          <option value="台"></option>
+          <option value="件"></option>
+          <option value="箱"></option>
+          <option value="公斤"></option>
+          <option value="批"></option>
+          <option value="月"></option>
+          <option value="小時"></option>
+        </datalist>
+
+        <!-- 動態明細輸入列表容器 -->
+        <div id="items-editor-list" class="space-y-3">
+          <!-- 由 JavaScript 動態渲染明細卡片 -->
+        </div>
+
+        <button type="button" onclick="addItem()" class="w-full py-2.5 text-xs font-semibold text-blue-700 bg-blue-50/70 hover:bg-blue-100 border border-dashed border-blue-300 rounded-xl transition flex items-center justify-center gap-1.5">
+          <i class="fa-solid fa-plus-circle"></i>
+          <span>+ 新增一筆報價明細</span>
+        </button>
+      </div>
+
+      <!-- 5. 稅務與條件設定 -->
+      <div class="bg-slate-50/80 rounded-xl border border-slate-200/90 p-4 shadow-sm space-y-3.5">
+        <h2 class="text-sm font-bold text-slate-800 flex items-center gap-2">
+          <span class="w-6 h-6 rounded-md bg-purple-100 text-purple-700 flex items-center justify-center text-xs">
+            <i class="fa-solid fa-calculator"></i>
+          </span>
+          稅務計算與交易條件
+        </h2>
+
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div>
+            <label class="block text-xs font-medium text-slate-600 mb-1">營業稅制設定</label>
+            <select id="taxMode" onchange="syncState()" class="w-full px-3 py-2 text-sm bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none">
+              <option value="exclusive">營業稅外加 (5%)</option>
+              <option value="inclusive">營業稅內含 (5%)</option>
+              <option value="exempt">免稅 / 零稅率 (0%)</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-slate-600 mb-1">整單折扣金額 (NT$)</label>
+            <input type="number" id="discountAmount" min="0" max="1000000000000" step="1" value="0" oninput="debouncedSyncState()" class="w-full px-3 py-2 text-sm font-num bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none" placeholder="0" />
+          </div>
+        </div>
+
+        <div>
+          <label class="block text-xs font-medium text-slate-600 mb-1">備註與交易條款</label>
+          <textarea id="notes" rows="4" oninput="debouncedSyncState()" class="w-full px-3 py-2 text-xs leading-relaxed bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none" placeholder="請輸入付款條件、交貨期、保固條款等說明..."></textarea>
+        </div>
+      </div>
+
+    </section>
+
+    <!-- ===================================================================
+         右側／下方：即時 A4 報價單預覽區
+         =================================================================== -->
+    <section id="preview-wrapper" class="flex-1 bg-slate-200/80 p-3 sm:p-6 lg:p-8 flex flex-col items-center overflow-x-hidden">
+
+      <!-- 預覽工具提示條 (列印時隱藏) -->
+      <div class="no-print w-full max-w-[210mm] mb-3 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-600">
+        <div class="flex flex-wrap items-center gap-2">
+          <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-white border border-slate-300 shadow-xs font-medium text-slate-700">
+            <span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+            即時 A4 預覽 (210mm × 297mm)
+          </span>
+          <span id="page-layout-badge" class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-blue-50 border border-blue-200 font-medium text-blue-700">
+            預估 1 頁・標準排版
+          </span>
+          <span id="scale-indicator" class="text-slate-500 hidden sm:inline">縮放比例：100%</span>
+        </div>
+        <div class="text-slate-500">
+          依實際行高自動壓縮排版，排得下皆維持單頁
+        </div>
+      </div>
+
+      <!-- 響應式縮放外層容器 -->
+      <div id="a4-scale-container" class="flex justify-center">
+        <!-- ===============================================================
+             標準 A4 報價單實體文件 (此區塊將直接渲染為 PDF 與列印輸出)
+             =============================================================== -->
+        <div id="quotation-document" class="a4-paper p-[11mm] text-slate-800 flex flex-col justify-between">
+
+          <!-- 第 1 頁底部參考線（僅於超出單頁時在預覽畫面顯示，列印與 PDF 自動隱藏） -->
+          <div id="page-break-guide" class="no-print hidden pointer-events-none absolute left-0 right-0 border-t-2 border-dashed border-amber-400/90 z-10" style="top: 297mm;">
+            <span class="absolute right-2 -top-5 bg-amber-100 text-amber-800 text-[10px] font-semibold px-2 py-0.5 rounded border border-amber-300 shadow-2xs">
+              ▲ 第 1 頁邊界（以下自動延續至第 2 頁）
+            </span>
+          </div>
+
+          <!-- 上半部：表頭 + 客戶資訊 + 明細表 -->
+          <div>
+            <!-- 報價單頂部表頭 -->
+            <div class="doc-header flex justify-between items-start border-b-2 border-slate-900 pb-3.5 mb-4">
+              <div class="max-w-[60%]">
+                <h1 id="prev-sellerName" class="doc-seller-title text-[20px] font-bold text-slate-900 tracking-wide">星辰雲端科技有限公司</h1>
+                <div class="mt-1.5 text-[11.5px] text-slate-600 space-y-0.5 leading-snug">
+                  <p id="prev-sellerTaxIdRow">統一編號：<span id="prev-sellerTaxId" class="font-num font-medium text-slate-800">54889912</span></p>
+                  <p>
+                    <span id="prev-sellerPhoneRow">電話：<span id="prev-sellerPhone" class="font-num">(02) 2700-1234</span></span>
+                    <span id="prev-sellerEmailSep" class="mx-1.5 text-slate-300">|</span>
+                    <span id="prev-sellerEmailRow">信箱：<span id="prev-sellerEmail" class="font-num">sales@example.com.tw</span></span>
+                  </p>
+                </div>
+              </div>
+
+              <div class="text-right">
+                <div class="inline-block bg-slate-900 text-white px-4 py-1 rounded-sm mb-1.5">
+                  <span class="text-base font-bold tracking-[0.25em] pl-[0.25em]">報價單</span>
+                  <span class="block text-[9px] tracking-[0.2em] text-slate-300 uppercase">QUOTATION</span>
+                </div>
+                <table class="ml-auto text-[11.5px] text-slate-700">
+                  <tr>
+                    <td class="text-slate-500 pr-2 py-0.5 text-right">報價日期：</td>
+                    <td id="prev-quoteDate" class="font-num font-medium text-right">2026-11-19</td>
+                  </tr>
+                </table>
+              </div>
+            </div>
+
+            <!-- 客戶（買方）資訊（無底框，雙欄網格對齊：左欄統編/電話，右欄聯絡窗口/公司地址） -->
+            <div class="doc-buyer mb-4 pb-3 border-b border-slate-200 space-y-1">
+              <p class="text-slate-900">
+                <span class="text-[12px] font-semibold text-slate-500">客戶資訊：</span><span class="font-bold text-[15px]" id="prev-buyerName">宏達精密工業股份有限公司</span>
+              </p>
+              <div class="grid grid-cols-12 gap-x-4 gap-y-1 text-[12px] text-slate-600">
+                <div class="col-span-4"><span class="text-slate-500">統一編號：</span><span id="prev-buyerTaxId" class="font-num text-slate-800">22334455</span></div>
+                <div class="col-span-8"><span class="text-slate-500">聯絡窗口：</span><span id="prev-buyerContact" class="text-slate-800">林雅婷 採購專員</span></div>
+                <div class="col-span-4"><span class="text-slate-500">聯絡電話：</span><span id="prev-buyerPhone" class="font-num text-slate-800">(04) 2359-8888</span></div>
+                <div class="col-span-8"><span class="text-slate-500">公司地址：</span><span id="prev-buyerAddress" class="text-slate-800">台中市西屯區工業區一路88號</span></div>
+              </div>
+            </div>
+
+            <!-- 報價明細表格（依實際內容行數自動調整密度，排得下皆維持單頁） -->
+            <div class="doc-table-wrap mb-4">
+              <table class="doc-table w-full border-collapse text-[12px]">
+                <thead>
+                  <tr class="bg-slate-800 text-white">
+                    <th class="py-2 px-2 text-center font-semibold w-11">項次</th>
+                    <th class="py-2 px-2.5 text-left font-semibold">品名 / 規格說明</th>
+                    <th class="py-2 px-2 text-right font-semibold w-14">數量</th>
+                    <th class="py-2 px-2 text-center font-semibold w-12">單位</th>
+                    <th class="py-2 px-2.5 text-right font-semibold w-24">單價 (NT$)</th>
+                    <th class="py-2 px-2.5 text-right font-semibold w-28">小計 (NT$)</th>
+                  </tr>
+                </thead>
+                <tbody id="prev-items-tbody">
+                  <!-- 由 JavaScript 動態渲染明細列 -->
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- 下半部：備註與交易條件 + 金額彙總 + 精簡頁尾（項次少時自動貼齊頁面底部） -->
+          <div class="doc-bottom-wrap mt-auto pt-4 avoid-break">
+            <!-- 金額彙總與備註雙欄區塊 -->
+            <div class="doc-summary-grid grid grid-cols-12 gap-6 items-start mb-3">
+              <!-- 左側：備註與交易條件 -->
+              <div class="col-span-7">
+                <div class="doc-notes-box border border-slate-200 rounded-md p-3">
+                  <div class="text-[11.5px] font-bold text-slate-800 mb-1 flex items-center gap-1">
+                    <span>備註與交易條件：</span>
+                  </div>
+                  <div id="prev-notes" class="doc-notes-text text-[11px] text-slate-600 whitespace-pre-line leading-[1.6] min-h-[44px]"></div>
+                </div>
+              </div>
+
+              <!-- 右側：金額彙總表 -->
+              <div class="col-span-5">
+                <table class="doc-summary-table w-full border-collapse text-[12px] border border-slate-200">
+                  <tbody>
+                    <tr class="border-b border-slate-200">
+                      <td class="py-2 px-3 text-slate-600 bg-slate-50 font-medium">未稅小計</td>
+                      <td id="prev-subtotalExcl" class="py-2 px-3 text-right font-num font-semibold text-slate-800">NT$ 0</td>
+                    </tr>
+                    <tr id="prev-discount-row" class="border-b border-slate-200 hidden">
+                      <td class="py-2 px-3 text-rose-700 bg-rose-50/50 font-medium">整單折扣</td>
+                      <td id="prev-discount" class="py-2 px-3 text-right font-num font-semibold text-rose-700">- NT$ 0</td>
+                    </tr>
+                    <tr class="border-b border-slate-200">
+                      <td id="prev-tax-label" class="py-2 px-3 text-slate-600 bg-slate-50 font-medium">營業稅額 (5%)</td>
+                      <td id="prev-taxAmount" class="py-2 px-3 text-right font-num font-semibold text-slate-800">NT$ 0</td>
+                    </tr>
+                    <tr class="bg-slate-900 text-white">
+                      <td class="py-2.5 px-3 font-bold text-[12.5px]">含稅總計 (NTD)</td>
+                      <td id="prev-grandTotal" class="py-2.5 px-3 text-right font-num font-bold text-sm">NT$ 0</td>
+                    </tr>
+                  </tbody>
+                </table>
+                <p id="prev-tax-hint" class="text-[10.5px] text-slate-500 mt-1.5 text-right">
+                  * 以上金額均以新台幣 (NTD) 計價
+                </p>
+              </div>
+            </div>
+
+            <!-- 精簡頁尾 -->
+            <div class="doc-footer-line pt-2.5 border-t border-slate-200 flex justify-between items-center text-[11px] text-slate-500">
+              <span>本報價單經雙方確認後即具正式訂購效力。</span>
+              <span>承辦人：<span id="prev-sellerContactFooter" class="text-slate-700 font-medium"></span></span>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- =====================================================================
+       歷史報價單側邊抽屜 (本機 localStorage + Google 試算表雙軌管理)
+       ===================================================================== -->
+  <div id="history-drawer" class="no-print hidden fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex justify-end">
+    <div class="bg-white w-full max-w-xl h-full shadow-2xl flex flex-col border-l border-slate-200 animate-fade-in">
+      <!-- 抽屜標題列 -->
+      <div class="px-5 py-4 bg-slate-900 text-white flex items-center justify-between shrink-0">
+        <div class="flex items-center gap-2.5">
+          <div class="w-8 h-8 rounded-lg bg-sky-500/20 text-sky-400 flex items-center justify-center">
+            <i class="fa-solid fa-clock-rotate-left"></i>
+          </div>
+          <div>
+            <h3 class="text-base font-bold">歷史報價單管理庫</h3>
+            <p class="text-[11px] text-slate-400">資料預設儲存於本機瀏覽器，設定雲端後自動雙向備份</p>
+          </div>
+        </div>
+        <button type="button" onclick="toggleHistoryDrawer(false)" class="w-8 h-8 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white flex items-center justify-center transition">
+          <i class="fa-solid fa-xmark text-lg"></i>
+        </button>
+      </div>
+
+      <!-- 搜尋與備份/雲端同步工具列 -->
+      <div class="p-4 bg-slate-50 border-b border-slate-200 space-y-3 shrink-0">
+        <div class="relative">
+          <i class="fa-solid fa-magnifying-glass text-slate-400 text-xs absolute left-3.5 top-1/2 -translate-y-1/2"></i>
+          <input type="text" id="history-search" oninput="renderHistoryList()" placeholder="搜尋報價單號、客戶名稱或統編..." class="w-full pl-9 pr-3 py-2 text-xs sm:text-sm bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none" />
+        </div>
+
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <div class="flex items-center gap-1.5">
+            <button type="button" onclick="exportHistoryBackup()" class="px-2.5 py-1.5 text-xs font-medium rounded-lg bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 transition flex items-center gap-1">
+              <i class="fa-solid fa-download text-slate-500"></i> 匯出 JSON 備份
+            </button>
+            <button type="button" onclick="document.getElementById('backup-file-input').click()" class="px-2.5 py-1.5 text-xs font-medium rounded-lg bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 transition flex items-center gap-1">
+              <i class="fa-solid fa-upload text-slate-500"></i> 還原備份
+            </button>
+            <input type="file" id="backup-file-input" accept=".json" class="hidden" onchange="importHistoryBackup(event)" />
+          </div>
+
+          <button type="button" id="btn-pull-cloud" onclick="pullFromGoogleSheets()" class="px-3 py-1.5 text-xs font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white shadow-2xs transition flex items-center gap-1.5">
+            <i class="fa-solid fa-cloud-arrow-down"></i> 從試算表同步
+          </button>
+        </div>
+      </div>
+
+      <!-- 歷史報價單列表容器 (採事件委派，絕不使用 inline onclick 字串拼接) -->
+      <div id="history-list-container" class="flex-1 overflow-y-auto p-4 space-y-3 bg-slate-100/70">
+        <!-- 由 JavaScript 動態渲染 -->
+      </div>
+    </div>
+  </div>
+
+  <!-- =====================================================================
+       Google 試算表雲端同步設定與 GAS 部署程式碼 Modal
+       ===================================================================== -->
+  <div id="cloud-modal" class="no-print hidden fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+    <div class="bg-white rounded-2xl max-w-2xl w-full max-h-[90vh] flex flex-col shadow-2xl border border-slate-200 overflow-hidden">
+      <!-- Modal 標題 -->
+      <div class="px-6 py-4 bg-slate-900 text-white flex items-center justify-between shrink-0">
+        <div class="flex items-center gap-2.5">
+          <i class="fa-solid fa-cloud-arrow-up text-emerald-400 text-lg"></i>
+          <div>
+            <h3 class="text-base font-bold">Google 試算表雙軌雲端同步設定</h3>
+            <p class="text-[11px] text-slate-400">設定完成後，每次儲存報價單將自動寫入您的私人 Google 試算表</p>
+          </div>
+        </div>
+        <button type="button" onclick="closeCloudModal()" class="text-slate-400 hover:text-white p-1">
+          <i class="fa-solid fa-xmark text-lg"></i>
+        </button>
+      </div>
+
+      <!-- Modal 內容區 -->
+      <div class="p-6 overflow-y-auto space-y-5 text-sm">
+        <!-- 誠實且精準的資安說明 -->
+        <div class="bg-amber-50 border border-amber-200 rounded-xl p-3.5 text-xs text-amber-900 flex items-start gap-2.5">
+          <i class="fa-solid fa-shield-halved text-amber-600 text-base mt-0.5"></i>
+          <div class="leading-relaxed space-y-1">
+            <p><strong>儲存方式與隱私說明：</strong></p>
+            <ul class="list-disc list-inside space-y-0.5">
+              <li>Web App 網址以<strong>明文存於本機瀏覽器 localStorage</strong>（且嚴格限制為 <code class="font-num bg-amber-100 px-1 rounded">https://script.google.com/macros/s/.../exec</code>）。</li>
+              <li>管理員密碼（API_SECRET）<strong>不會寫入 localStorage 或硬碟</strong>，僅暫存於目前分頁的 <strong>sessionStorage</strong>，關閉分頁即自動清除，下次開啟需重新輸入。</li>
+              <li>建議設定<strong>至少 24 字元的隨機高強度密碼</strong>，並切勿寫死於原始碼中。</li>
+            </ul>
+          </div>
+        </div>
+
+        <!-- 連線設定表單 -->
+        <div class="space-y-3.5">
+          <div>
+            <label class="block text-xs font-bold text-slate-700 mb-1">1. Google Apps Script Web App 網址</label>
+            <input type="url" id="cloud-gas-url" placeholder="https://script.google.com/macros/s/AKfycb.../exec" class="w-full px-3 py-2 text-xs font-num bg-slate-50 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none" />
+          </div>
+
+          <div>
+            <div class="flex items-center justify-between mb-1">
+              <label class="block text-xs font-bold text-slate-700">2. 管理員存取密碼 (API_SECRET，僅本工作階段有效)</label>
+              <button type="button" onclick="generateStrongSecretHint()" class="text-[11px] font-medium text-blue-600 hover:text-blue-700 hover:underline">
+                <i class="fa-solid fa-key mr-0.5"></i>產生 32 字元隨機密碼
+              </button>
+            </div>
+            <input type="password" id="cloud-gas-secret" autocomplete="off" placeholder="請輸入與 Apps Script 指令碼屬性相同的密碼（建議 24 字元以上）" class="w-full px-3 py-2 text-xs font-num bg-slate-50 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none" />
+          </div>
+
+          <div class="flex flex-wrap items-center justify-between gap-2 pt-1">
+            <button type="button" onclick="clearCloudConfig()" class="px-3 py-2 text-xs font-medium text-rose-600 hover:bg-rose-50 rounded-lg transition">
+              解除雲端綁定
+            </button>
+            <div class="flex items-center gap-2">
+              <button type="button" id="btn-test-cloud" onclick="saveAndTestCloudConfig()" class="px-4 py-2 text-xs sm:text-sm font-semibold text-white bg-emerald-600 hover:bg-emerald-500 rounded-lg shadow-sm transition flex items-center gap-1.5">
+                <i class="fa-solid fa-plug-circle-check"></i>
+                <span>儲存設定並測試連線</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- 摺疊教學與 GAS 後端程式碼一鍵複製 -->
+        <details class="border border-slate-200 rounded-xl bg-slate-50 overflow-hidden">
+          <summary class="px-4 py-3 text-xs font-bold text-slate-800 cursor-pointer hover:bg-slate-100 flex items-center justify-between">
+            <span><i class="fa-solid fa-code text-blue-600 mr-1.5"></i>尚未建立後端？點此展開「Google Apps Script 安全強化版程式碼」</span>
+            <i class="fa-solid fa-chevron-down text-slate-400"></i>
+          </summary>
+          <div class="p-4 border-t border-slate-200 bg-white space-y-3 text-xs text-slate-600">
+            <ol class="list-decimal list-inside space-y-1.5 leading-relaxed">
+              <li>在您的 Google 雲端硬碟新增一份空白<strong>Google 試算表</strong>（保持「僅限自己存取」不公開）。</li>
+              <li>點擊試算表上方選單「<strong>擴充功能</strong>」→「<strong>Apps Script</strong>」。</li>
+              <li>清空編輯器預設內容，貼上下方程式碼並按儲存（已內建 <code class="bg-slate-100 px-1 rounded font-num">LockService</code> 並發鎖、欄位驗證與防公式注入）。</li>
+              <li>點擊左側齒輪「<strong>專案設定</strong>」→ 最下方「<strong>指令碼屬性</strong>」→ 新增屬性名稱 <code class="bg-slate-100 px-1.5 py-0.5 rounded text-rose-600 font-num">API_SECRET</code>，值填入 24 字元以上隨機密碼。</li>
+              <li>點擊右上角「<strong>部署</strong>」→「<strong>新增部署</strong>」→ 類型選「<strong>網頁應用程式</strong>」→ 執行身分選「<strong>我</strong>」、誰可以存取選「<strong>所有人</strong>」，複製產生的網址貼回上方即可。</li>
+            </ol>
+
+            <div class="relative">
+              <div class="flex items-center justify-between bg-slate-800 text-slate-200 px-3 py-1.5 rounded-t-lg text-[11px]">
+                <span class="font-num">Code.gs (Google Apps Script 安全強化版後端)</span>
+                <button type="button" onclick="copyGasBackendCode()" class="px-2.5 py-1 rounded bg-blue-600 hover:bg-blue-500 text-white font-medium transition flex items-center gap-1">
+                  <i class="fa-regular fa-copy"></i> 複製程式碼
+                </button>
+              </div>
+              <textarea id="gas-backend-code" readonly rows="12" class="w-full p-3 text-[11px] font-num bg-slate-900 text-emerald-300 rounded-b-lg outline-none leading-relaxed">var QNO_RE = /^[A-Za-z0-9_-]{1,40}$/;
+
+function doPost(e) {
+  var lock = LockService.getScriptLock();
+  var lockAcquired = false;
+  try {
+    lock.waitLock(10000);
+    lockAcquired = true;
+
+    if (!e || !e.postData || !e.postData.contents) {
+      return jsonResponse({ ok: false, error: '無效的請求內容' });
+    }
+
+    var payload = JSON.parse(e.postData.contents);
+    var secret = PropertiesService.getScriptProperties().getProperty('API_SECRET');
+    if (!secret || typeof payload.secret !== 'string' || payload.secret !== secret) {
+      return jsonResponse({ ok: false, error: '管理員密碼錯誤或尚未設定 API_SECRET' });
+    }
+
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var summarySheet = getOrCreateSheet(ss, '報價單總表', [
+      '報價單號', '報價日期', '客戶名稱', '客戶統編', '未稅金額', '營業稅', '含稅總計', '最後更新時間', '完整JSON資料'
+    ]);
+    var detailSheet = getOrCreateSheet(ss, '報價明細表', [
+      '報價單號', '報價日期', '客戶名稱', '項次', '品名', '規格說明', '數量', '單位', '單價', '小計'
+    ]);
+
+    if (payload.action === 'test') {
+      return jsonResponse({ ok: true, message: '連線驗證成功！試算表：' + ss.getName() });
+    }
+
+    if (payload.action === 'save') {
+      var q = payload.data;
+      if (!isValidQuotePayload(q)) {
+        return jsonResponse({ ok: false, error: '報價單資料結構或單號格式不合法' });
+      }
+      upsertSummaryRow(summarySheet, q);
+      replaceDetailRows(detailSheet, q);
+      return jsonResponse({ ok: true, message: '已成功同步至 Google 試算表' });
+    }
+
+    if (payload.action === 'list') {
+      var rows = summarySheet.getDataRange().getValues();
+      var list = [];
+      for (var i = 1; i < rows.length; i++) {
+        var jsonCell = rows[i][8] || rows[i][9]; // 向下相容舊版欄位索引
+        if (jsonCell) {
+          try {
+            var parsed = JSON.parse(jsonCell);
+            if (isValidQuotePayload(parsed)) list.push(parsed);
+          } catch (err) {}
+        }
+      }
+      return jsonResponse({ ok: true, data: list });
+    }
+
+    if (payload.action === 'delete') {
+      if (typeof payload.quoteNo !== 'string' || !QNO_RE.test(payload.quoteNo)) {
+        return jsonResponse({ ok: false, error: '報價單號格式不合法' });
+      }
+      deleteByQuoteNo(summarySheet, payload.quoteNo);
+      deleteByQuoteNo(detailSheet, payload.quoteNo);
+      return jsonResponse({ ok: true, message: '已從試算表刪除' });
+    }
+
+    return jsonResponse({ ok: false, error: '未知的操作指令' });
+  } catch (err) {
+    return jsonResponse({ ok: false, error: err.toString() });
+  } finally {
+    if (lockAcquired) {
+      lock.releaseLock();
+    }
+  }
+}
+
+// 防止 Google Sheets 公式注入 (=, +, -, @, Tab, CR 開頭皆加上前綴單引號)
+function safeCell(v) {
+  if (v === null || v === undefined) return '';
+  if (typeof v === 'string' && /^[=+\-@\t\r]/.test(v)) {
+    return "'" + v;
+  }
+  return v;
+}
+
+function safeNum(v) {
+  var n = Number(v);
+  if (!isFinite(n) || n < 0) return 0;
+  return Math.min(n, 1e12);
+}
+
+function isValidQuotePayload(q) {
+  if (!q || typeof q !== 'object') return false;
+  if (typeof q.quoteNo !== 'string' || !QNO_RE.test(q.quoteNo)) return false;
+  if (!Array.isArray(q.items) || q.items.length > 500) return false;
+  if (!q.buyer || typeof q.buyer !== 'object') return false;
+  if (!q.totals || typeof q.totals !== 'object') return false;
+  return true;
+}
+
+function getOrCreateSheet(ss, name, headers) {
+  var sheet = ss.getSheetByName(name);
+  if (!sheet) {
+    sheet = ss.insertSheet(name);
+    sheet.appendRow(headers);
+    sheet.getRange(1, 1, 1, headers.length).setFontWeight('bold').setBackground('#f1f5f9');
+  }
+  return sheet;
+}
+
+function upsertSummaryRow(sheet, q) {
+  var data = sheet.getDataRange().getValues();
+  var rowData = [
+    safeCell(String(q.quoteNo)),
+    safeCell(String(q.quoteDate || '')),
+    safeCell(String(q.buyer.name || '')),
+    safeCell(String(q.buyer.taxId || '')),
+    safeNum(q.totals.subtotalExcl),
+    safeNum(q.totals.taxAmount),
+    safeNum(q.totals.grandTotal),
+    safeCell(String(q.updatedAt || '')),
+    JSON.stringify(q)
+  ];
+  for (var i = 1; i < data.length; i++) {
+    if (String(data[i][0]) === String(q.quoteNo)) {
+      sheet.getRange(i + 1, 1, 1, rowData.length).setValues([rowData]);
+      return;
+    }
+  }
+  sheet.appendRow(rowData);
+}
+
+function replaceDetailRows(sheet, q) {
+  deleteByQuoteNo(sheet, q.quoteNo);
+  if (!q.items || q.items.length === 0) return;
+  var newRows = q.items.map(function(item, idx) {
+    var qty = safeNum(item.qty);
+    var price = safeNum(item.price);
+    var lineTotal = Math.round(qty * price);
+    return [
+      safeCell(String(q.quoteNo)),
+      safeCell(String(q.quoteDate || '')),
+      safeCell(String(q.buyer.name || '')),
+      idx + 1,
+      safeCell(String(item.name || '')),
+      safeCell(String(item.spec || '')),
+      qty,
+      safeCell(String(item.unit || '式')),
+      price,
+      lineTotal
+    ];
+  });
+  sheet.getRange(sheet.getLastRow() + 1, 1, newRows.length, newRows[0].length).setValues(newRows);
+}
+
+function deleteByQuoteNo(sheet, quoteNo) {
+  var data = sheet.getDataRange().getValues();
+  for (var i = data.length - 1; i >= 1; i--) {
+    if (String(data[i][0]) === String(quoteNo)) {
+      sheet.deleteRow(i + 1);
+    }
+  }
+}
+
+function jsonResponse(obj) {
+  return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);
+}</textarea>
+            </div>
+          </div>
+        </details>
+      </div>
+    </div>
+  </div>
+
+  <!-- =====================================================================
+       Toast 通知元件 (取代原生 alert)
+       ===================================================================== -->
+  <div id="toast-container" class="no-print fixed bottom-5 right-5 z-50 flex flex-col gap-2 pointer-events-none"></div>
+
+  <!-- =====================================================================
+       自訂確認對話框 Modal (取代原生 confirm)
+       ===================================================================== -->
+  <div id="confirm-modal" class="no-print hidden fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4">
+    <div class="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 transform transition-all">
+      <div class="flex items-start gap-3.5">
+        <div class="w-10 h-10 rounded-full bg-amber-100 text-amber-600 flex items-center justify-center shrink-0 mt-0.5">
+          <i class="fa-solid fa-triangle-exclamation text-lg"></i>
+        </div>
+        <div>
+          <h3 id="confirm-title" class="text-base font-bold text-slate-900">確認執行操作</h3>
+          <p id="confirm-message" class="text-sm text-slate-600 mt-1.5 leading-relaxed">確定要執行此動作嗎？</p>
+        </div>
+      </div>
+      <div class="mt-6 flex justify-end gap-2.5">
+        <button type="button" onclick="closeConfirmModal()" class="px-4 py-2 text-sm font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition">
+          取消
+        </button>
+        <button type="button" id="confirm-ok-btn" class="px-4 py-2 text-sm font-medium text-white bg-rose-600 hover:bg-rose-700 rounded-lg shadow-sm transition">
+          確定執行
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- =====================================================================
+       系統核心邏輯 (JavaScript)
+       ===================================================================== -->
+  <script>
+    /**
+     * 儲存鍵值與資安常數定義
+     */
+    const STORAGE_KEY_SELLER = 'enterprise_quotation_seller_v1';
+    const STORAGE_KEY_HISTORY = 'enterprise_quotation_history_v1';
+    const STORAGE_KEY_CLOUD_URL = 'enterprise_quotation_cloud_url_v2';
+    const LEGACY_KEY_CLOUD = 'enterprise_quotation_cloud_cfg_v1'; // 舊版含明文 secret，啟動時自動清理
+    const SESSION_KEY_CLOUD_SECRET = 'enterprise_quotation_cloud_secret_session';
+
+    const QNO_RE = /^[A-Za-z0-9_-]{1,40}$/;
+    const MAX_IMPORT_FILE_BYTES = 2 * 1024 * 1024;   // CSV / Excel 匯入上限 2MB
+    const MAX_BACKUP_FILE_BYTES = 5 * 1024 * 1024;   // JSON 備份還原上限 5MB
+    const MAX_ITEMS_PER_QUOTE = 500;                 // 單筆報價單明細上限
+    const MAX_HISTORY_RECORDS = 1000;                // JSON 匯入與歷史紀錄上限
+    const MAX_MONETARY_VALUE = 1e12;                 // 金額/數量防溢位上限 (一兆)
+
+    /**
+     * 應用程式全域狀態物件（已移除未使用的 validUntil 與 seller.address 死欄位）
+     */
+    let appState = {
+      quoteNo: '',
+      quoteDate: '',
+      seller: {
+        name: '',
+        taxId: '',
+        contact: '',
+        phone: '',
+        email: '',
+        bankName: '',
+        bankAccountName: '',
+        bankAccountNo: ''
+      },
+      buyer: {
+        name: '',
+        taxId: '',
+        contact: '',
+        phone: '',
+        address: ''
+      },
+      items: [],
+      taxMode: 'exclusive', // 'exclusive' | 'inclusive' | 'exempt'
+      discountAmount: 0,
+      notes: ''
+    };
+
+    let confirmCallback = null;
+
+    /**
+     * =====================================================================
+     * 通用防呆、資安驗證與效能工具函式
+     * =====================================================================
+     */
+
+    /**
+     * 防抖函式（避免每次按鍵都觸發重繪、Reflow 或頻繁寫入 localStorage）
+     */
+    function debounce(fn, delay) {
+      let timer = null;
+      return function (...args) {
+        clearTimeout(timer);
+        timer = setTimeout(() => fn.apply(this, args), delay);
+      };
+    }
+
+    /**
+     * 數值安全限制：阻斷 Infinity / -Infinity / NaN 與負數、超大數值破版
+     */
+    function clampNumber(val, min = 0, max = MAX_MONETARY_VALUE) {
+      const n = Number(val);
+      if (!Number.isFinite(n)) return min;
+      return Math.min(max, Math.max(min, n));
+    }
+
+    /**
+     * 嚴格驗證 Google Apps Script Web App 網址白名單
+     */
+    function isValidGasUrl(u) {
+      if (typeof u !== 'string') return false;
+      try {
+        const parsed = new URL(u);
+        return (
+          parsed.protocol === 'https:' &&
+          parsed.hostname === 'script.google.com' &&
+          /^\/macros\/s\/[\w-]+\/exec$/.test(parsed.pathname)
+        );
+      } catch (e) {
+        return false;
+      }
+    }
+
+    /**
+     * 驗證歷史報價單紀錄結構（防 XSS 單號注入、防超量 DoS 與異常資料型別）
+     */
+    function isValidRecord(r) {
+      if (!r || typeof r !== 'object' || Array.isArray(r)) return false;
+      if (typeof r.quoteNo !== 'string' || !QNO_RE.test(r.quoteNo)) return false;
+      const items = r.items ?? [];
+      if (!Array.isArray(items) || items.length > MAX_ITEMS_PER_QUOTE) return false;
+      return true;
+    }
+
+    /**
+     * 清洗並正規化報價單紀錄（僅白名單抽取欄位，避免原型污染與無效數值）
+     */
+    function sanitizeRecord(raw) {
+      const safeStr = (v, maxLen = 500) => (typeof v === 'string' ? v.slice(0, maxLen) : String(v ?? '').slice(0, maxLen));
+      const allowedTax = ['exclusive', 'inclusive', 'exempt'];
+      const taxMode = allowedTax.includes(raw.taxMode) ? raw.taxMode : 'exclusive';
+
+      const sanitizedItems = (Array.isArray(raw.items) ? raw.items.slice(0, MAX_ITEMS_PER_QUOTE) : []).map(it => ({
+        name: safeStr(it?.name ?? '', 300),
+        spec: safeStr(it?.spec ?? '', 1000),
+        qty: clampNumber(it?.qty, 0, MAX_MONETARY_VALUE),
+        unit: safeStr(it?.unit ?? '式', 30) || '式',
+        price: clampNumber(it?.price, 0, MAX_MONETARY_VALUE)
+      }));
+
+      const sellerRaw = raw.seller && typeof raw.seller === 'object' ? raw.seller : {};
+      const buyerRaw = raw.buyer && typeof raw.buyer === 'object' ? raw.buyer : {};
+      const discountAmount = clampNumber(raw.discountAmount, 0, MAX_MONETARY_VALUE);
+
+      // 重新計算安全金額彙總，避免信任外部可能被竄改或含 Infinity 的 totals
+      const computedTotals = computeTotalsFromData(sanitizedItems, taxMode, discountAmount);
+
+      return {
+        quoteNo: raw.quoteNo.trim(),
+        quoteDate: safeStr(raw.quoteDate || '', 20),
+        seller: {
+          name: safeStr(sellerRaw.name || '', 200),
+          taxId: safeStr(sellerRaw.taxId || '', 20),
+          contact: safeStr(sellerRaw.contact || '', 100),
+          phone: safeStr(sellerRaw.phone || '', 50),
+          email: safeStr(sellerRaw.email || '', 150),
+          bankName: safeStr(sellerRaw.bankName || '', 150),
+          bankAccountName: safeStr(sellerRaw.bankAccountName || '', 150),
+          bankAccountNo: safeStr(sellerRaw.bankAccountNo || '', 80)
+        },
+        buyer: {
+          name: safeStr(buyerRaw.name || '', 200),
+          taxId: safeStr(buyerRaw.taxId || '', 20),
+          contact: safeStr(buyerRaw.contact || '', 100),
+          phone: safeStr(buyerRaw.phone || '', 50),
+          address: safeStr(buyerRaw.address || '', 300)
+        },
+        items: sanitizedItems,
+        taxMode,
+        discountAmount,
+        notes: safeStr(raw.notes || '', 5000),
+        totals: computedTotals,
+        updatedAt: safeStr(raw.updatedAt || '', 60),
+        updatedAtISO: typeof raw.updatedAtISO === 'string' && !Number.isNaN(Date.parse(raw.updatedAtISO))
+          ? raw.updatedAtISO
+          : '',
+        syncedToCloud: Boolean(raw.syncedToCloud)
+      };
+    }
+
+    /**
+     * 共用安全 POST 函式：統一在發送 fetch 前執行 GAS 網址白名單驗證
+     */
+    async function postToGas(url, payload) {
+      if (!isValidGasUrl(url)) {
+        throw new Error('不合法的 Google Apps Script 網址（僅允許 https://script.google.com/macros/s/.../exec）');
+      }
+      const res = await fetch(url, {
+        method: 'POST',
+        body: JSON.stringify(payload)
+      });
+      if (!res.ok) {
+        throw new Error(`HTTP 錯誤狀態碼：${res.status}`);
+      }
+      return await res.json();
+    }
+
+    /**
+     * 日期與密碼學安全單號產生函式（每日 100 萬種組合並檢查防撞號）
+     */
+    function getFormattedDate(offsetDays = 0) {
+      const d = new Date();
+      d.setDate(d.getDate() + offsetDays);
+      const yyyy = d.getFullYear();
+      const mm = String(d.getMonth() + 1).padStart(2, '0');
+      const dd = String(d.getDate()).padStart(2, '0');
+      return `${yyyy}-${mm}-${dd}`;
+    }
+
+    function generateDefaultQuoteNo() {
+      const today = getFormattedDate(0).replace(/-/g, '');
+      const existingSet = new Set(getLocalHistory().map(item => item.quoteNo));
+      const buf = new Uint32Array(1);
+      for (let attempt = 0; attempt < 20; attempt++) {
+        crypto.getRandomValues(buf);
+        const rand = String(buf[0] % 1000000).padStart(6, '0');
+        const candidate = `QT-${today}-${rand}`;
+        if (!existingSet.has(candidate)) {
+          return candidate;
+        }
+      }
+      return `QT-${today}-${Date.now().toString().slice(-6)}`;
+    }
+
+    /**
+     * XSS 安全跳脫與金額格式化
+     */
+    function escapeHtml(str) {
+      if (str === null || str === undefined) return '';
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
+    function formatNumber(num) {
+      const n = clampNumber(num, 0, MAX_MONETARY_VALUE);
+      return n.toLocaleString('zh-TW', { maximumFractionDigits: 2 });
+    }
+
+    function formatCurrency(num) {
+      const n = Math.round(clampNumber(num, 0, MAX_MONETARY_VALUE));
+      return `NT$ ${n.toLocaleString('zh-TW')}`;
+    }
+
+    /**
+     * 賣方公司資訊自動記憶 (加入 Debounce 降低頻繁 IO)
+     */
+    function persistSellerToStorage() {
+      try {
+        localStorage.setItem(STORAGE_KEY_SELLER, JSON.stringify(appState.seller));
+      } catch (e) {
+        console.warn('儲存賣方資訊失敗:', e);
+      }
+    }
+
+    const debouncedSyncState = debounce(() => {
+      syncState();
+    }, 120);
+
+    const debouncedSaveSeller = debounce(() => {
+      persistSellerToStorage();
+    }, 400);
+
+    function handleSellerInput() {
+      debouncedSyncState();
+      debouncedSaveSeller();
+    }
+
+    function clearSavedSellerStorage() {
+      openConfirmModal(
+        '清除本機賣方記憶資料？',
+        '將從瀏覽器 localStorage 移除已記憶的賣方公司資訊與匯款帳號（不會影響已歸檔的歷史報價單）。',
+        () => {
+          localStorage.removeItem(STORAGE_KEY_SELLER);
+          ['sellerName', 'sellerTaxId', 'sellerContact', 'sellerPhone', 'sellerEmail', 'bankName', 'bankAccountName', 'bankAccountNo'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.value = '';
+          });
+          syncState();
+          showToast('已清除本機賣方記憶資料', 'info');
+        }
+      );
+    }
+
+    function loadSellerFromStorage() {
+      try {
+        const raw = localStorage.getItem(STORAGE_KEY_SELLER);
+        if (!raw) return false;
+        const seller = JSON.parse(raw);
+        if (seller && typeof seller === 'object') {
+          document.getElementById('sellerName').value = seller.name || '';
+          document.getElementById('sellerTaxId').value = seller.taxId || '';
+          document.getElementById('sellerContact').value = seller.contact || '';
+          document.getElementById('sellerPhone').value = seller.phone || '';
+          document.getElementById('sellerEmail').value = seller.email || '';
+          document.getElementById('bankName').value = seller.bankName || '';
+          document.getElementById('bankAccountName').value = seller.bankAccountName || '';
+          document.getElementById('bankAccountNo').value = seller.bankAccountNo || '';
+          return true;
+        }
+      } catch (e) {
+        console.warn('讀取賣方資訊失敗:', e);
+      }
+      return false;
+    }
+
+    /**
+     * 同步表單輸入至全域狀態並更新右側 A4 預覽
+     */
+    function syncState() {
+      appState.quoteNo = document.getElementById('quoteNo').value.trim();
+      appState.quoteDate = document.getElementById('quoteDate').value;
+
+      appState.seller = {
+        name: document.getElementById('sellerName').value.trim(),
+        taxId: document.getElementById('sellerTaxId').value.trim(),
+        contact: document.getElementById('sellerContact').value.trim(),
+        phone: document.getElementById('sellerPhone').value.trim(),
+        email: document.getElementById('sellerEmail').value.trim(),
+        bankName: document.getElementById('bankName').value.trim(),
+        bankAccountName: document.getElementById('bankAccountName').value.trim(),
+        bankAccountNo: document.getElementById('bankAccountNo').value.trim()
+      };
+
+      appState.buyer = {
+        name: document.getElementById('buyerName').value.trim(),
+        taxId: document.getElementById('buyerTaxId').value.trim(),
+        contact: document.getElementById('buyerContact').value.trim(),
+        phone: document.getElementById('buyerPhone').value.trim(),
+        address: document.getElementById('buyerAddress').value.trim()
+      };
+
+      appState.taxMode = document.getElementById('taxMode').value;
+      appState.discountAmount = clampNumber(document.getElementById('discountAmount').value, 0, MAX_MONETARY_VALUE);
+      appState.notes = document.getElementById('notes').value;
+
+      renderPreview();
+    }
+
+    /**
+     * 台灣營業稅與金額計算核心（全面套用 clampNumber 防 Infinity / NaN）
+     */
+    function computeTotalsFromData(items, taxMode, discountAmount) {
+      const rawSum = (items || []).reduce((acc, item) => {
+        const qty = clampNumber(item.qty, 0, MAX_MONETARY_VALUE);
+        const price = clampNumber(item.price, 0, MAX_MONETARY_VALUE);
+        const line = clampNumber(Math.round(qty * price), 0, MAX_MONETARY_VALUE);
+        return clampNumber(acc + line, 0, MAX_MONETARY_VALUE);
+      }, 0);
+
+      const discount = Math.min(rawSum, clampNumber(discountAmount, 0, MAX_MONETARY_VALUE));
+      const netAfterDiscount = Math.max(0, rawSum - discount);
+
+      let subtotalExcl = 0;
+      let taxAmount = 0;
+      let grandTotal = 0;
+
+      if (taxMode === 'exclusive') {
+        subtotalExcl = netAfterDiscount;
+        taxAmount = Math.round(subtotalExcl * 0.05);
+        grandTotal = clampNumber(subtotalExcl + taxAmount, 0, MAX_MONETARY_VALUE);
+      } else if (taxMode === 'inclusive') {
+        grandTotal = netAfterDiscount;
+        subtotalExcl = Math.round(grandTotal / 1.05);
+        taxAmount = grandTotal - subtotalExcl;
+      } else {
+        subtotalExcl = netAfterDiscount;
+        taxAmount = 0;
+        grandTotal = subtotalExcl;
+      }
+
+      return {
+        rawSum,
+        discount,
+        subtotalExcl,
+        taxAmount,
+        grandTotal
+      };
+    }
+
+    function calculateTotals() {
+      return computeTotalsFromData(appState.items, appState.taxMode, appState.discountAmount);
+    }
+
+    /**
+     * 渲染右側 A4 報價單即時預覽
+     */
+    function renderPreview() {
+      const s = appState.seller;
+      const b = appState.buyer;
+      const totals = calculateTotals();
+
+      // 表頭賣方資訊
+      document.getElementById('prev-sellerName').textContent = s.name || '（未填寫賣方公司名稱）';
+      document.getElementById('prev-sellerTaxId').textContent = s.taxId || '-';
+      document.getElementById('prev-sellerPhone').textContent = s.phone || '-';
+      document.getElementById('prev-sellerEmail').textContent = s.email || '-';
+      const contactFooter = document.getElementById('prev-sellerContactFooter');
+      if (contactFooter) contactFooter.textContent = s.contact || '-';
+
+      // 日期
+      document.getElementById('prev-quoteDate').textContent = appState.quoteDate || '-';
+
+      // 買方資訊
+      document.getElementById('prev-buyerName').textContent = b.name || '（未填寫客戶名稱）';
+      document.getElementById('prev-buyerTaxId').textContent = b.taxId || '-';
+      document.getElementById('prev-buyerContact').textContent = b.contact || '-';
+      document.getElementById('prev-buyerPhone').textContent = b.phone || '-';
+      document.getElementById('prev-buyerAddress').textContent = b.address || '-';
+
+      // 明細表格列（搭配智慧密度樣式，依實際行數自動排版）
+      const tbody = document.getElementById('prev-items-tbody');
+      if (appState.items.length === 0) {
+        tbody.innerHTML = `
+          <tr>
+            <td colspan="6" class="py-6 text-center text-slate-400 border border-slate-300">
+              尚未新增任何報價明細項目
+            </td>
+          </tr>
+        `;
+      } else {
+        tbody.innerHTML = appState.items.map((item, idx) => {
+          const qty = clampNumber(item.qty, 0, MAX_MONETARY_VALUE);
+          const price = clampNumber(item.price, 0, MAX_MONETARY_VALUE);
+          const lineTotal = clampNumber(Math.round(qty * price), 0, MAX_MONETARY_VALUE);
+          return `
+            <tr class="avoid-break">
+              <td class="py-1.5 px-2 text-center font-num text-slate-600 border-b border-slate-200 align-top">${idx + 1}</td>
+              <td class="py-1.5 px-2.5 border-b border-slate-200 align-top">
+                <div class="font-semibold text-slate-900 leading-snug">${escapeHtml(item.name || '（未命名項目）')}</div>
+                ${item.spec ? `<div class="doc-item-spec text-[11px] leading-snug text-slate-500 mt-0.5 whitespace-pre-line">${escapeHtml(item.spec)}</div>` : ''}
+              </td>
+              <td class="py-1.5 px-2 text-right font-num text-slate-800 border-b border-slate-200 align-top">${formatNumber(qty)}</td>
+              <td class="py-1.5 px-2 text-center text-slate-700 border-b border-slate-200 align-top">${escapeHtml(item.unit || '式')}</td>
+              <td class="py-1.5 px-2.5 text-right font-num text-slate-800 border-b border-slate-200 align-top">${formatNumber(price)}</td>
+              <td class="py-1.5 px-2.5 text-right font-num font-semibold text-slate-900 border-b border-slate-200 align-top">${formatNumber(lineTotal)}</td>
+            </tr>
+          `;
+        }).join('');
+      }
+
+      // 備註
+      document.getElementById('prev-notes').textContent = appState.notes || '無特別備註事項。';
+
+      // 金額彙總
+      document.getElementById('prev-subtotalExcl').textContent = formatCurrency(totals.subtotalExcl);
+      const discountRow = document.getElementById('prev-discount-row');
+      if (totals.discount > 0) {
+        discountRow.classList.remove('hidden');
+        document.getElementById('prev-discount').textContent = `- ${formatCurrency(totals.discount)}`;
+      } else {
+        discountRow.classList.add('hidden');
+      }
+
+      const taxRowLabel = document.getElementById('prev-tax-label');
+      if (appState.taxMode === 'inclusive') {
+        taxRowLabel.textContent = '內含營業稅 (5%)';
+      } else if (appState.taxMode === 'exempt') {
+        taxRowLabel.textContent = '營業稅額 (免稅)';
+      } else {
+        taxRowLabel.textContent = '營業稅額 (5%)';
+      }
+
+      document.getElementById('prev-taxAmount').textContent = formatCurrency(totals.taxAmount);
+      document.getElementById('prev-grandTotal').textContent = formatCurrency(totals.grandTotal);
+
+      // 依實際渲染行數與高度自動調整單頁/多頁排版密度
+      adjustLayoutDensity();
+      updatePreviewScale();
+    }
+
+    /**
+     * 智慧排版自適應引擎：
+     * 直接量測實際文字行高與總高度，動態在標準/緊湊/高密度/多頁間切換
+     */
+    function adjustLayoutDensity() {
+      const paper = document.getElementById('quotation-document');
+      const badge = document.getElementById('page-layout-badge');
+      const guide = document.getElementById('page-break-guide');
+      if (!paper) return;
+
+      const paperWidthPx = paper.offsetWidth || 794;
+      const pxPerMm = paperWidthPx / 210;
+      const maxSinglePagePx = Math.floor(294 * pxPerMm);
+
+      paper.classList.remove('density-compact', 'density-tight', 'is-multipage');
+      paper.classList.add('measuring');
+
+      let modeLabel = '標準排版';
+      let isMultipage = false;
+      let finalHeight = paper.scrollHeight;
+
+      if (finalHeight > maxSinglePagePx) {
+        paper.classList.add('density-compact');
+        finalHeight = paper.scrollHeight;
+        if (finalHeight <= maxSinglePagePx) {
+          modeLabel = '智慧緊湊・單頁';
+        } else {
+          paper.classList.remove('density-compact');
+          paper.classList.add('density-tight');
+          finalHeight = paper.scrollHeight;
+          if (finalHeight <= maxSinglePagePx) {
+            modeLabel = '高密度・單頁';
+          } else {
+            paper.classList.remove('density-tight');
+            paper.classList.add('density-compact', 'is-multipage');
+            finalHeight = paper.scrollHeight;
+            isMultipage = true;
+            modeLabel = '多頁自然換頁';
+          }
+        }
+      }
+
+      paper.classList.remove('measuring');
+
+      const estPages = isMultipage ? Math.max(2, Math.ceil(finalHeight / (286 * pxPerMm))) : 1;
+
+      if (badge) {
+        if (isMultipage) {
+          badge.className = 'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-amber-50 border border-amber-300 font-medium text-amber-800';
+          badge.textContent = `預估 ${estPages} 頁・${modeLabel}`;
+        } else {
+          badge.className = 'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-blue-50 border border-blue-200 font-medium text-blue-700';
+          badge.textContent = `預估 1 頁・${modeLabel}`;
+        }
+      }
+
+      if (guide) {
+        guide.classList.toggle('hidden', !isMultipage);
+      }
+    }
+
+    /**
+     * 明細項目 CRUD 與排序操作
+     */
+    function addItem(preset = null) {
+      if (appState.items.length >= MAX_ITEMS_PER_QUOTE) {
+        showToast(`單張報價單最多支援 ${MAX_ITEMS_PER_QUOTE} 項明細`, 'error');
+        return;
+      }
+      appState.items.push(
+        preset || {
+          name: '',
+          spec: '',
+          qty: 1,
+          unit: '式',
+          price: 0
+        }
+      );
+      renderItemsEditor();
+      syncState();
+    }
+
+    function updateItemField(index, field, value) {
+      if (!appState.items[index]) return;
+      if (field === 'qty' || field === 'price') {
+        const safeVal = clampNumber(value, 0, MAX_MONETARY_VALUE);
+        appState.items[index][field] = safeVal;
+        const lineTotal = clampNumber(
+          Math.round(clampNumber(appState.items[index].qty) * clampNumber(appState.items[index].price)),
+          0,
+          MAX_MONETARY_VALUE
+        );
+        const badge = document.getElementById(`item-line-total-${index}`);
+        if (badge) badge.textContent = formatCurrency(lineTotal);
+      } else {
+        appState.items[index][field] = value;
+      }
+      debouncedSyncState();
+    }
+
+    function duplicateItem(index) {
+      if (appState.items.length >= MAX_ITEMS_PER_QUOTE) {
+        showToast(`單張報價單最多支援 ${MAX_ITEMS_PER_QUOTE} 項明細`, 'error');
+        return;
+      }
+      const target = appState.items[index];
+      if (!target) return;
+      appState.items.splice(index + 1, 0, { ...target });
+      renderItemsEditor();
+      syncState();
+      showToast(`已複製第 ${index + 1} 項明細`, 'info');
+    }
+
+    function removeItem(index) {
+      appState.items.splice(index, 1);
+      renderItemsEditor();
+      syncState();
+    }
+
+    function moveItem(index, direction) {
+      const newIndex = index + direction;
+      if (newIndex < 0 || newIndex >= appState.items.length) return;
+      const temp = appState.items[index];
+      appState.items[index] = appState.items[newIndex];
+      appState.items[newIndex] = temp;
+      renderItemsEditor();
+      syncState();
+    }
+
+    function renderItemsEditor() {
+      const container = document.getElementById('items-editor-list');
+      const countBadge = document.getElementById('item-count-badge');
+      countBadge.textContent = `${appState.items.length} 項`;
+
+      if (appState.items.length === 0) {
+        container.innerHTML = `
+          <div class="text-center py-8 px-4 bg-white rounded-xl border border-dashed border-slate-300 text-slate-400 text-xs">
+            目前沒有報價明細，請點擊下方「新增一筆報價明細」或使用 CSV/Excel 匯入
+          </div>
+        `;
+        return;
+      }
+
+      container.innerHTML = appState.items.map((item, idx) => {
+        const qty = clampNumber(item.qty, 0, MAX_MONETARY_VALUE);
+        const price = clampNumber(item.price, 0, MAX_MONETARY_VALUE);
+        const lineTotal = clampNumber(Math.round(qty * price), 0, MAX_MONETARY_VALUE);
+        return `
+          <div class="bg-white rounded-xl border border-slate-200 p-3.5 shadow-2xs space-y-2.5 transition hover:border-blue-300">
+            <div class="flex items-center justify-between gap-2 pb-2 border-b border-slate-100">
+              <div class="flex items-center gap-2">
+                <span class="w-6 h-6 rounded-md bg-slate-800 text-white font-num text-xs font-bold flex items-center justify-center">${idx + 1}</span>
+                <span id="item-line-total-${idx}" class="font-num text-xs font-bold text-blue-700 bg-blue-50 px-2 py-0.5 rounded-md">
+                  ${formatCurrency(lineTotal)}
+                </span>
+              </div>
+              <div class="flex items-center gap-1">
+                <button type="button" onclick="moveItem(${idx}, -1)" ${idx === 0 ? 'disabled' : ''} class="p-1.5 text-xs text-slate-500 hover:text-slate-800 disabled:opacity-30 rounded hover:bg-slate-100" title="上移">
+                  <i class="fa-solid fa-arrow-up"></i>
+                </button>
+                <button type="button" onclick="moveItem(${idx}, 1)" ${idx === appState.items.length - 1 ? 'disabled' : ''} class="p-1.5 text-xs text-slate-500 hover:text-slate-800 disabled:opacity-30 rounded hover:bg-slate-100" title="下移">
+                  <i class="fa-solid fa-arrow-down"></i>
+                </button>
+                <button type="button" onclick="duplicateItem(${idx})" class="p-1.5 text-xs text-slate-500 hover:text-blue-600 rounded hover:bg-blue-50" title="複製此項">
+                  <i class="fa-regular fa-copy"></i>
+                </button>
+                <button type="button" onclick="removeItem(${idx})" class="p-1.5 text-xs text-slate-500 hover:text-rose-600 rounded hover:bg-rose-50" title="刪除此項">
+                  <i class="fa-regular fa-trash-can"></i>
+                </button>
+              </div>
+            </div>
+
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+              <div>
+                <label class="block text-[11px] font-medium text-slate-500 mb-0.5">品名 / 項目名稱</label>
+                <input type="text" value="${escapeHtml(item.name)}" oninput="updateItemField(${idx}, 'name', this.value)" class="w-full px-2.5 py-1.5 text-xs bg-slate-50 border border-slate-300 rounded-lg focus:bg-white focus:ring-2 focus:ring-blue-500 outline-none" placeholder="例：企業官網客製化開發" />
+              </div>
+              <div>
+                <label class="block text-[11px] font-medium text-slate-500 mb-0.5">規格說明（選填）</label>
+                <input type="text" value="${escapeHtml(item.spec)}" oninput="updateItemField(${idx}, 'spec', this.value)" class="w-full px-2.5 py-1.5 text-xs bg-slate-50 border border-slate-300 rounded-lg focus:bg-white focus:ring-2 focus:ring-blue-500 outline-none" placeholder="例：含 RWD 響應式設計與後台管理" />
+              </div>
+            </div>
+
+            <div class="grid grid-cols-3 gap-2.5">
+              <div>
+                <label class="block text-[11px] font-medium text-slate-500 mb-0.5">數量</label>
+                <input type="number" step="any" min="0" max="${MAX_MONETARY_VALUE}" value="${qty}" oninput="updateItemField(${idx}, 'qty', this.value)" class="w-full px-2.5 py-1.5 text-xs font-num bg-slate-50 border border-slate-300 rounded-lg focus:bg-white focus:ring-2 focus:ring-blue-500 outline-none" />
+              </div>
+              <div>
+                <label class="block text-[11px] font-medium text-slate-500 mb-0.5">單位</label>
+                <input type="text" list="unit-options" value="${escapeHtml(item.unit)}" oninput="updateItemField(${idx}, 'unit', this.value)" class="w-full px-2.5 py-1.5 text-xs bg-slate-50 border border-slate-300 rounded-lg focus:bg-white focus:ring-2 focus:ring-blue-500 outline-none" placeholder="式" />
+              </div>
+              <div>
+                <label class="block text-[11px] font-medium text-slate-500 mb-0.5">單價 (NT$)</label>
+                <input type="number" step="any" min="0" max="${MAX_MONETARY_VALUE}" value="${price}" oninput="updateItemField(${idx}, 'price', this.value)" class="w-full px-2.5 py-1.5 text-xs font-num bg-slate-50 border border-slate-300 rounded-lg focus:bg-white focus:ring-2 focus:ring-blue-500 outline-none" />
+              </div>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    /**
+     * CSV / Excel 批次匯入功能（含 2MB 檔案大小上限、500 筆上限與數值防呆）
+     */
+    function toggleImportPanel() {
+      const panel = document.getElementById('import-panel');
+      panel.classList.toggle('hidden');
+    }
+
+    function downloadImportTemplate() {
+      const rows = [
+        ['品名', '規格說明', '數量', '單位', '單價'],
+        ['雲端 ERP 核心模組授權', '支援 20 人同時在線作業，含年度維護', 1, '套', 85000],
+        ['客製化 API 串接開發', '金流與電子發票系統雙向整合', 2, '式', 25000],
+        ['教育訓練與上線輔導', '現場操作培訓（每梯次 3 小時）', 3, '場', 6000]
+      ];
+      const csvContent = '\uFEFF' + Papa.unparse(rows, { escapeFormulae: true });
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = '報價明細匯入標準範本.csv';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      showToast('已下載 CSV 匯入範本（含 UTF-8 BOM 與公式防護）', 'success');
+    }
+
+    function setupDragAndDrop() {
+      const dropZone = document.getElementById('drop-zone');
+      if (!dropZone) return;
+
+      ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+        dropZone.addEventListener(eventName, e => {
+          e.preventDefault();
+          e.stopPropagation();
+        });
+      });
+
+      ['dragenter', 'dragover'].forEach(eventName => {
+        dropZone.addEventListener(eventName, () => {
+          dropZone.classList.add('border-blue-600', 'bg-blue-100/70');
+        });
+      });
+
+      ['dragleave', 'drop'].forEach(eventName => {
+        dropZone.addEventListener(eventName, () => {
+          dropZone.classList.remove('border-blue-600', 'bg-blue-100/70');
+        });
+      });
+
+      dropZone.addEventListener('drop', e => {
+        const files = e.dataTransfer.files;
+        if (files && files.length > 0) {
+          processImportedFile(files[0]);
+        }
+      });
+    }
+
+    function handleFileSelect(event) {
+      const file = event.target.files[0];
+      if (file) {
+        processImportedFile(file);
+      }
+      event.target.value = '';
+    }
+
+    function processImportedFile(file) {
+      if (!file) return;
+      if (file.size > MAX_IMPORT_FILE_BYTES) {
+        showToast('檔案大小超過 2MB 上限，請精簡後再試', 'error');
+        return;
+      }
+
+      const fileName = file.name.toLowerCase();
+      if (fileName.endsWith('.csv')) {
+        const reader = new FileReader();
+        reader.onload = function (e) {
+          const buffer = e.target.result;
+          let text = '';
+          try {
+            const utf8Decoder = new TextDecoder('utf-8', { fatal: true });
+            text = utf8Decoder.decode(buffer);
+          } catch (err) {
+            const big5Decoder = new TextDecoder('big5');
+            text = big5Decoder.decode(buffer);
+          }
+          const parsed = Papa.parse(text, { skipEmptyLines: true });
+          applyImportedRows(parsed.data);
+        };
+        reader.readAsArrayBuffer(file);
+      } else if (fileName.endsWith('.xlsx') || fileName.endsWith('.xls')) {
+        const reader = new FileReader();
+        reader.onload = function (e) {
+          try {
+            const data = new Uint8Array(e.target.result);
+            const workbook = XLSX.read(data, { type: 'array' });
+            const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+            const rows = XLSX.utils.sheet_to_json(firstSheet, { header: 1, defval: '' });
+            applyImportedRows(rows);
+          } catch (err) {
+            showToast('Excel 檔案解析失敗，請確認檔案未加密或損毀', 'error');
+          }
+        };
+        reader.readAsArrayBuffer(file);
+      } else {
+        showToast('不支援的檔案格式，請上傳 .csv、.xlsx 或 .xls', 'error');
+      }
+    }
+
+    function applyImportedRows(rows) {
+      if (!Array.isArray(rows) || rows.length === 0) {
+        showToast('檔案內容為空，無法匯入', 'error');
+        return;
+      }
+
+      const firstRowStr = Array.isArray(rows[0]) ? rows[0].map(c => String(c || '').trim()).join(',') : '';
+      const hasHeader = /品名|項目|名稱|name|item/i.test(firstRowStr);
+      const rawDataRows = hasHeader ? rows.slice(1) : rows;
+      const wasTruncated = rawDataRows.length > MAX_ITEMS_PER_QUOTE;
+      const dataRows = rawDataRows.slice(0, MAX_ITEMS_PER_QUOTE);
+
+      const parsedItems = [];
+      dataRows.forEach(row => {
+        if (!Array.isArray(row)) return;
+        const name = String(row[0] ?? '').trim().slice(0, 300);
+        const spec = String(row[1] ?? '').trim().slice(0, 1000);
+        const rawQty = parseFloat(String(row[2] ?? '1').replace(/,/g, ''));
+        const unit = (String(row[3] ?? '式').trim() || '式').slice(0, 30);
+        const rawPrice = parseFloat(String(row[4] ?? '0').replace(/,/g, ''));
+
+        const qty = Number.isFinite(rawQty) ? clampNumber(rawQty, 0, MAX_MONETARY_VALUE) : 1;
+        const price = Number.isFinite(rawPrice) ? clampNumber(rawPrice, 0, MAX_MONETARY_VALUE) : 0;
+
+        if (name || spec || price > 0) {
+          parsedItems.push({
+            name: name || '未命名項目',
+            spec,
+            qty,
+            unit,
+            price
+          });
+        }
+      });
+
+      if (parsedItems.length === 0) {
+        showToast('未偵測到有效的明細資料列', 'error');
+        return;
+      }
+
+      const mode = document.querySelector('input[name="importMode"]:checked')?.value || 'append';
+      if (mode === 'replace') {
+        appState.items = parsedItems;
+      } else {
+        const remainingSlots = Math.max(0, MAX_ITEMS_PER_QUOTE - appState.items.length);
+        if (remainingSlots === 0) {
+          showToast(`明細已達 ${MAX_ITEMS_PER_QUOTE} 筆上限，請選擇「覆蓋現有明細」或刪除部分項目`, 'error');
+          return;
+        }
+        appState.items = appState.items.concat(parsedItems.slice(0, remainingSlots));
+      }
+
+      renderItemsEditor();
+      syncState();
+      const extraHint = wasTruncated ? `（已自動截斷超過 ${MAX_ITEMS_PER_QUOTE} 筆之資料）` : '';
+      showToast(`成功匯入 ${parsedItems.length} 筆報價明細！${extraHint}`, 'success');
+    }
+
+    /**
+     * CSV 與 PDF 雙格式匯出功能（CSV 開啟 escapeFormulae 防公式注入）
+     */
+    function exportToCSV() {
+      syncState();
+      const totals = calculateTotals();
+      const taxModeText = {
+        exclusive: '營業稅外加 (5%)',
+        inclusive: '營業稅內含 (5%)',
+        exempt: '免稅 / 零稅率 (0%)'
+      }[appState.taxMode];
+
+      const csvRows = [
+        ['報價單編號', appState.quoteNo, '報價日期', appState.quoteDate],
+        ['賣方公司', appState.seller.name, '賣方統編', appState.seller.taxId, '業務聯絡人', appState.seller.contact],
+        ['買方客戶', appState.buyer.name, '買方統編', appState.buyer.taxId, '客戶聯絡人', appState.buyer.contact],
+        [],
+        ['項次', '品名', '規格說明', '數量', '單位', '單價 (NT$)', '小計 (NT$)']
+      ];
+
+      appState.items.forEach((item, idx) => {
+        const qty = clampNumber(item.qty, 0, MAX_MONETARY_VALUE);
+        const price = clampNumber(item.price, 0, MAX_MONETARY_VALUE);
+        const lineTotal = clampNumber(Math.round(qty * price), 0, MAX_MONETARY_VALUE);
+        csvRows.push([
+          idx + 1,
+          item.name,
+          item.spec,
+          qty,
+          item.unit,
+          price,
+          lineTotal
+        ]);
+      });
+
+      csvRows.push([]);
+      csvRows.push(['', '', '', '', '', '稅務計價方式', taxModeText]);
+      csvRows.push(['', '', '', '', '', '未稅小計 (NT$)', totals.subtotalExcl]);
+      if (totals.discount > 0) {
+        csvRows.push(['', '', '', '', '', '整單折扣 (NT$)', -totals.discount]);
+      }
+      csvRows.push(['', '', '', '', '', '營業稅額 (NT$)', totals.taxAmount]);
+      csvRows.push(['', '', '', '', '', '含稅總計 (NT$)', totals.grandTotal]);
+
+      // 啟用 escapeFormulae 防止 Excel / Sheets 公式注入
+      const csvString = '\uFEFF' + Papa.unparse(csvRows, { escapeFormulae: true });
+      const blob = new Blob([csvString], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      const safeBuyer = (appState.buyer.name || '客戶').replace(/[\\/:*?"<>|]/g, '_');
+      const safeNo = (appState.quoteNo || 'QT').replace(/[\\/:*?"<>|]/g, '_');
+
+      link.href = url;
+      link.download = `報價單_${safeNo}_${safeBuyer}.csv`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+      showToast('已匯出 CSV 報價單（已啟用公式注入防護與 UTF-8 BOM）', 'success');
+    }
+
+    async function exportToPDF() {
+      syncState();
+      const element = document.getElementById('quotation-document');
+      const scaleContainer = document.getElementById('a4-scale-container');
+      const btn = document.getElementById('btn-export-pdf');
+      const origHtml = btn.innerHTML;
+
+      btn.disabled = true;
+      btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i><span>產生 PDF 中...</span>`;
+
+      const prevTransform = scaleContainer.style.transform;
+      const prevHeight = scaleContainer.style.height;
+      scaleContainer.style.transform = 'none';
+      scaleContainer.style.height = 'auto';
+
+      const safeBuyer = (appState.buyer.name || '客戶').replace(/[\\/:*?"<>|]/g, '_');
+      const safeNo = (appState.quoteNo || 'QT').replace(/[\\/:*?"<>|]/g, '_');
+      const filename = `報價單_${safeNo}_${safeBuyer}.pdf`;
+
+      const opt = {
+        margin: [10, 10, 10, 10],
+        filename: filename,
+        pagebreak: { mode: ['css', 'legacy'], avoid: ['tr', '.avoid-break'] },
+        image: { type: 'jpeg', quality: 0.98 },
+        html2canvas: {
+          scale: 2,
+          useCORS: true,
+          letterRendering: true,
+          scrollX: 0,
+          scrollY: 0
+        },
+        jsPDF: {
+          unit: 'mm',
+          format: 'a4',
+          orientation: 'portrait'
+        }
+      };
+
+      try {
+        const holder = document.createElement('div');
+        holder.style.cssText = 'position:fixed;left:-10000px;top:0;width:190mm;background:#ffffff;';
+        const clone = element.cloneNode(true);
+        clone.removeAttribute('id');
+        clone.classList.add('pdf-mode');
+        const cloneGuide = clone.querySelector('#page-break-guide');
+        if (cloneGuide) cloneGuide.remove();
+        holder.appendChild(clone);
+        document.body.appendChild(holder);
+        try {
+          await html2pdf().set(opt).from(clone).save();
+        } finally {
+          holder.remove();
+        }
+        showToast(`已成功匯出 ${filename}`, 'success');
+      } catch (err) {
+        console.error('PDF 匯出失敗:', err);
+        showToast('PDF 匯出發生異常，建議可改用「直接列印 → 另存為 PDF」', 'error');
+      } finally {
+        scaleContainer.style.transform = prevTransform;
+        scaleContainer.style.height = prevHeight;
+        updatePreviewScale();
+        btn.disabled = false;
+        btn.innerHTML = origHtml;
+      }
+    }
+
+    /**
+     * 範例資料載入與表單重設
+     */
+    function loadSampleData(isInitial = false) {
+      document.getElementById('quoteNo').value = generateDefaultQuoteNo();
+      document.getElementById('quoteDate').value = getFormattedDate(0);
+
+      if (!document.getElementById('sellerName').value.trim()) {
+        document.getElementById('sellerName').value = '星辰雲端科技有限公司';
+        document.getElementById('sellerTaxId').value = '54889912';
+        document.getElementById('sellerContact').value = '陳志明 業務經理';
+        document.getElementById('sellerPhone').value = '(02) 2700-1234 #108';
+        document.getElementById('sellerEmail').value = 'sales@example.com.tw';
+        document.getElementById('bankName').value = '玉山銀行 (808) 信義分行';
+        document.getElementById('bankAccountName').value = '星辰雲端科技有限公司';
+        document.getElementById('bankAccountNo').value = '0123-940-056789';
+      }
+
+      document.getElementById('buyerName').value = '宏達精密工業股份有限公司';
+      document.getElementById('buyerTaxId').value = '22334455';
+      document.getElementById('buyerContact').value = '林雅婷 採購專員';
+      document.getElementById('buyerPhone').value = '(04) 2359-8888';
+      document.getElementById('buyerAddress').value = '台中市西屯區工業區一路88號';
+
+      appState.items = [
+        {
+          name: '企業級雲端進銷存與報價管理平台建置',
+          spec: '含權限控管、多倉庫存追蹤與客製化報表模組',
+          qty: 1,
+          unit: '套',
+          price: 120000
+        },
+        {
+          name: 'ERP 與電子發票 Turnkey API 雙向串接',
+          spec: '支援 B2B / B2C 自動開立、作廢與折讓單同步',
+          qty: 1,
+          unit: '式',
+          price: 35000
+        },
+        {
+          name: '高可用性雲端主機託管與每日異地備份服務',
+          spec: '12 個月 SLA 99.9% 維運監控與資安防護',
+          qty: 12,
+          unit: '月',
+          price: 3500
+        }
+      ];
+
+      document.getElementById('taxMode').value = 'exclusive';
+      document.getElementById('discountAmount').value = 2000;
+      document.getElementById('notes').value =
+        '1. 付款條件：簽約確認後支付 40% 訂金，系統驗收上線後支付 60% 尾款。\n' +
+        '2. 交貨期限：自收到訂金及確認規格書次日起算 20 個工作天內完成交付。\n' +
+        '3. 保固服務：自正式驗收合格日起提供一年免費系統瑕疵修復與技術諮詢。';
+
+      renderItemsEditor();
+      syncState();
+      if (!isInitial) {
+        showToast('已載入商業範例報價單資料', 'info');
+      }
+    }
+
+    function confirmResetForm() {
+      openConfirmModal(
+        '清空目前報價單內容？',
+        '將清除目前客戶資料與所有報價明細（已記憶的我方公司資訊與歷史紀錄庫將會保留）。',
+        () => {
+          document.getElementById('quoteNo').value = generateDefaultQuoteNo();
+          document.getElementById('quoteDate').value = getFormattedDate(0);
+
+          document.getElementById('buyerName').value = '';
+          document.getElementById('buyerTaxId').value = '';
+          document.getElementById('buyerContact').value = '';
+          document.getElementById('buyerPhone').value = '';
+          document.getElementById('buyerAddress').value = '';
+
+          appState.items = [{ name: '', spec: '', qty: 1, unit: '式', price: 0 }];
+          document.getElementById('taxMode').value = 'exclusive';
+          document.getElementById('discountAmount').value = 0;
+          document.getElementById('notes').value = '';
+
+          renderItemsEditor();
+          syncState();
+          showToast('已清空目前表單內容', 'info');
+        }
+      );
+    }
+
+    /**
+     * 右側 A4 紙張響應式自動縮放
+     */
+    function updatePreviewScale() {
+      const wrapper = document.getElementById('preview-wrapper');
+      const scaleContainer = document.getElementById('a4-scale-container');
+      const paper = document.getElementById('quotation-document');
+      const indicator = document.getElementById('scale-indicator');
+      if (!wrapper || !scaleContainer || !paper) return;
+
+      const availableWidth = wrapper.clientWidth - 32;
+      const paperWidthPx = paper.offsetWidth || 794;
+
+      if (availableWidth < paperWidthPx && availableWidth > 200) {
+        const scale = availableWidth / paperWidthPx;
+        scaleContainer.style.transform = `scale(${scale})`;
+        scaleContainer.style.height = `${paper.offsetHeight * scale}px`;
+        if (indicator) indicator.textContent = `縮放比例：${Math.round(scale * 100)}%`;
+      } else {
+        scaleContainer.style.transform = 'none';
+        scaleContainer.style.height = 'auto';
+        if (indicator) indicator.textContent = '縮放比例：100%';
+      }
+    }
+
+    /**
+     * 自訂 Toast 通知與確認對話框
+     */
+    function showToast(message, type = 'info') {
+      const container = document.getElementById('toast-container');
+      if (!container) return;
+
+      const styles = {
+        success: 'bg-emerald-900 text-white border-emerald-700',
+        error: 'bg-rose-900 text-white border-rose-700',
+        info: 'bg-slate-900 text-white border-slate-700'
+      };
+      const icons = {
+        success: 'fa-circle-check text-emerald-400',
+        error: 'fa-circle-exclamation text-rose-400',
+        info: 'fa-circle-info text-sky-400'
+      };
+
+      const toast = document.createElement('div');
+      toast.className = `pointer-events-auto flex items-center gap-2.5 px-4 py-3 rounded-xl border shadow-lg text-xs sm:text-sm font-medium transition-all duration-300 transform translate-y-2 opacity-0 ${styles[type] || styles.info}`;
+      toast.innerHTML = `
+        <i class="fa-solid ${icons[type] || icons.info}"></i>
+        <span>${escapeHtml(message)}</span>
+      `;
+      container.appendChild(toast);
+
+      requestAnimationFrame(() => {
+        toast.classList.remove('translate-y-2', 'opacity-0');
+      });
+
+      setTimeout(() => {
+        toast.classList.add('opacity-0', 'translate-y-2');
+        setTimeout(() => toast.remove(), 300);
+      }, 3500);
+    }
+
+    function openConfirmModal(title, message, onConfirm) {
+      document.getElementById('confirm-title').textContent = title;
+      document.getElementById('confirm-message').textContent = message;
+      confirmCallback = onConfirm;
+      document.getElementById('confirm-modal').classList.remove('hidden');
+    }
+
+    function closeConfirmModal() {
+      document.getElementById('confirm-modal').classList.add('hidden');
+      confirmCallback = null;
+    }
+
+    document.getElementById('confirm-ok-btn').addEventListener('click', () => {
+      if (typeof confirmCallback === 'function') {
+        confirmCallback();
+      }
+      closeConfirmModal();
+    });
+
+    /**
+     * =====================================================================
+     * 雙軌儲存引擎：本機 localStorage + Google 試算表同步 (Secret 僅存 sessionStorage)
+     * =====================================================================
+     */
+
+    /**
+     * 遷移並清除舊版 localStorage 中殘留的明文 secret
+     */
+    function migrateLegacyCloudStorage() {
+      try {
+        const legacyRaw = localStorage.getItem(LEGACY_KEY_CLOUD);
+        if (!legacyRaw) return;
+        const legacy = JSON.parse(legacyRaw);
+        if (legacy && typeof legacy.url === 'string' && isValidGasUrl(legacy.url)) {
+          if (!localStorage.getItem(STORAGE_KEY_CLOUD_URL)) {
+            localStorage.setItem(STORAGE_KEY_CLOUD_URL, legacy.url);
+          }
+        }
+        // 立即刪除舊版含明文 secret 的鍵值
+        localStorage.removeItem(LEGACY_KEY_CLOUD);
+      } catch (e) {
+        localStorage.removeItem(LEGACY_KEY_CLOUD);
+      }
+    }
+
+    function getLocalHistory() {
+      try {
+        const raw = localStorage.getItem(STORAGE_KEY_HISTORY);
+        if (!raw) return [];
+        const parsed = JSON.parse(raw);
+        if (!Array.isArray(parsed)) return [];
+        return parsed.filter(isValidRecord);
+      } catch (e) {
+        console.error('讀取本機歷史紀錄失敗:', e);
+        return [];
+      }
+    }
+
+    function setLocalHistory(list) {
+      try {
+        localStorage.setItem(STORAGE_KEY_HISTORY, JSON.stringify(list));
+        updateHistoryBadge();
+      } catch (e) {
+        console.error('寫入本機歷史紀錄失敗:', e);
+        showToast('本機儲存空間已滿，建議先匯出 JSON 備份後清理舊單據', 'error');
+      }
+    }
+
+    function updateHistoryBadge() {
+      const list = getLocalHistory();
+      const badge = document.getElementById('history-count-badge');
+      if (badge) badge.textContent = list.length;
+    }
+
+    /**
+     * 取得雲端設定：URL 來自 localStorage（經白名單驗證），Secret 僅來自 sessionStorage
+     */
+    function getCloudConfig() {
+      try {
+        const storedUrl = localStorage.getItem(STORAGE_KEY_CLOUD_URL) || '';
+        const url = isValidGasUrl(storedUrl) ? storedUrl : '';
+        const secret = sessionStorage.getItem(SESSION_KEY_CLOUD_SECRET) || '';
+        return { url, secret };
+      } catch (e) {
+        return { url: '', secret: '' };
+      }
+    }
+
+    function updateCloudStatusIndicator() {
+      const cfg = getCloudConfig();
+      const dot = document.getElementById('cloud-status-dot');
+      if (!dot) return;
+      if (cfg.url && cfg.secret) {
+        dot.className = 'w-2 h-2 rounded-full bg-emerald-400 animate-pulse';
+      } else if (cfg.url) {
+        // 已記住網址但本工作階段尚未解鎖密碼
+        dot.className = 'w-2 h-2 rounded-full bg-amber-400';
+      } else {
+        dot.className = 'w-2 h-2 rounded-full bg-slate-500';
+      }
+    }
+
+    /**
+     * 儲存目前報價單（加入 updatedAtISO 時間戳記以支援精準版本比對）
+     */
+    async function saveCurrentQuotation() {
+      syncState();
+      if (!appState.quoteNo || !QNO_RE.test(appState.quoteNo)) {
+        appState.quoteNo = generateDefaultQuoteNo();
+        document.getElementById('quoteNo').value = appState.quoteNo;
+      }
+
+      const totals = calculateTotals();
+      const now = new Date();
+      const record = sanitizeRecord({
+        quoteNo: appState.quoteNo,
+        quoteDate: appState.quoteDate,
+        seller: appState.seller,
+        buyer: appState.buyer,
+        items: appState.items,
+        taxMode: appState.taxMode,
+        discountAmount: appState.discountAmount,
+        notes: appState.notes,
+        totals: totals,
+        updatedAt: now.toLocaleString('zh-TW', { hour12: false }),
+        updatedAtISO: now.toISOString(),
+        syncedToCloud: false
+      });
+
+      // 1. 寫入本機 localStorage（同單號覆蓋更新，新單號置頂）
+      const history = getLocalHistory();
+      const existingIdx = history.findIndex(item => item.quoteNo === record.quoteNo);
+      if (existingIdx >= 0) {
+        history[existingIdx] = record;
+      } else {
+        history.unshift(record);
+      }
+      setLocalHistory(history);
+
+      const cloudCfg = getCloudConfig();
+      if (!cloudCfg.url || !cloudCfg.secret) {
+        const hint = cloudCfg.url ? '（雲端密碼尚未於本次工作階段解鎖，僅存本機）' : '';
+        showToast(`報價單 ${record.quoteNo} 已儲存至本機歷史紀錄${hint}`, 'success');
+        return;
+      }
+
+      // 2. 若已通過本次工作階段雲端驗證，同步寫入 Google 試算表
+      showToast('已存至本機，正在同步至 Google 試算表...', 'info');
+      try {
+        const result = await postToGas(cloudCfg.url, {
+          action: 'save',
+          secret: cloudCfg.secret,
+          data: record
+        });
+        if (result.ok) {
+          const latestHistory = getLocalHistory();
+          const idx = latestHistory.findIndex(item => item.quoteNo === record.quoteNo);
+          if (idx >= 0) {
+            latestHistory[idx].syncedToCloud = true;
+            setLocalHistory(latestHistory);
+          }
+          if (!document.getElementById('history-drawer').classList.contains('hidden')) {
+            renderHistoryList();
+          }
+          showToast('雙軌儲存成功！已同步寫入 Google 試算表', 'success');
+        } else {
+          showToast(`本機已存，但雲端同步失敗：${result.error || '驗證錯誤'}`, 'error');
+        }
+      } catch (err) {
+        console.error('雲端同步錯誤:', err);
+        showToast(`本機已存，但雲端同步失敗：${err.message || '連線異常'}`, 'error');
+      }
+    }
+
+    /**
+     * 開啟/關閉歷史紀錄抽屜
+     */
+    function toggleHistoryDrawer(open) {
+      const drawer = document.getElementById('history-drawer');
+      if (open) {
+        renderHistoryList();
+        drawer.classList.remove('hidden');
+      } else {
+        drawer.classList.add('hidden');
+      }
+    }
+
+    /**
+     * 渲染歷史報價單列表（已修正 XSS：按鈕改用 data-act / data-no 搭配事件委派）
+     */
+    function renderHistoryList() {
+      const container = document.getElementById('history-list-container');
+      const keyword = (document.getElementById('history-search')?.value || '').trim().toLowerCase();
+      const history = getLocalHistory();
+
+      const filtered = history.filter(q => {
+        if (!keyword) return true;
+        return (
+          (q.quoteNo || '').toLowerCase().includes(keyword) ||
+          (q.buyer?.name || '').toLowerCase().includes(keyword) ||
+          (q.buyer?.taxId || '').toLowerCase().includes(keyword)
+        );
+      });
+
+      if (filtered.length === 0) {
+        container.innerHTML = `
+          <div class="text-center py-14 px-4 bg-white rounded-xl border border-dashed border-slate-300 text-slate-400">
+            <i class="fa-regular fa-folder-open text-3xl mb-2.5 text-slate-300"></i>
+            <p class="text-sm font-medium text-slate-600">${keyword ? '找不到符合關鍵字的報價單' : '尚無已儲存的歷史報價單'}</p>
+            <p class="text-xs mt-1">點擊上方「儲存報價單」即可將目前單據歸檔至此</p>
+          </div>
+        `;
+        return;
+      }
+
+      container.innerHTML = filtered.map(q => {
+        const grandTotal = q.totals?.grandTotal ?? 0;
+        const itemCount = q.items?.length ?? 0;
+        const syncBadge = q.syncedToCloud
+          ? `<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-100 text-emerald-700"><i class="fa-solid fa-cloud-check"></i> 已同步雲端</span>`
+          : `<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-slate-200 text-slate-600"><i class="fa-solid fa-laptop"></i> 僅存本機</span>`;
+
+        const safeNoAttr = escapeHtml(q.quoteNo);
+        return `
+          <div class="bg-white rounded-xl border border-slate-200 p-4 shadow-2xs hover:border-blue-300 transition space-y-2.5">
+            <div class="flex items-start justify-between gap-2">
+              <div>
+                <div class="flex items-center gap-2 flex-wrap">
+                  <span class="font-num font-bold text-sm text-blue-700">${safeNoAttr}</span>
+                  ${syncBadge}
+                </div>
+                <h4 class="font-bold text-slate-900 text-sm mt-1">${escapeHtml(q.buyer?.name || '（未填寫客戶名稱）')}</h4>
+              </div>
+              <div class="text-right shrink-0">
+                <span class="block font-num font-bold text-sm text-slate-900">${formatCurrency(grandTotal)}</span>
+                <span class="text-[11px] text-slate-400">共 ${itemCount} 項明細</span>
+              </div>
+            </div>
+
+            <div class="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-100 text-[11px] text-slate-500">
+              <span>報價日：<strong class="font-num text-slate-700">${escapeHtml(q.quoteDate || '-')}</strong></span>
+              <span>儲存於：${escapeHtml(q.updatedAt || '-')}</span>
+            </div>
+
+            <div class="flex items-center justify-end gap-2 pt-1">
+              <button type="button" data-act="delete" data-no="${safeNoAttr}" class="px-2.5 py-1.5 text-xs font-medium text-rose-600 hover:bg-rose-50 rounded-lg transition">
+                <i class="fa-regular fa-trash-can mr-1"></i>刪除
+              </button>
+              <button type="button" data-act="clone" data-no="${safeNoAttr}" class="px-2.5 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition">
+                <i class="fa-regular fa-copy mr-1"></i>複製為新單
+              </button>
+              <button type="button" data-act="load" data-no="${safeNoAttr}" class="px-3 py-1.5 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-500 rounded-lg shadow-2xs transition">
+                <i class="fa-solid fa-pen-to-square mr-1"></i>載入編輯
+              </button>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    /**
+     * 歷史列表事件委派（於初始化時綁定一次，杜絕 inline JS 字串注入）
+     */
+    function bindHistoryListDelegation() {
+      const container = document.getElementById('history-list-container');
+      if (!container) return;
+      container.addEventListener('click', e => {
+        const btn = e.target.closest('button[data-act]');
+        if (!btn) return;
+        const no = btn.dataset.no;
+        if (!no || !QNO_RE.test(no)) {
+          showToast('報價單號格式異常，已拒絕操作', 'error');
+          return;
+        }
+        if (btn.dataset.act === 'delete') deleteQuotationByNo(no);
+        if (btn.dataset.act === 'clone') cloneQuotationByNo(no);
+        if (btn.dataset.act === 'load') loadQuotationByNo(no);
+      });
+    }
+
+    /**
+     * 載入指定歷史報價單至編輯器
+     */
+    function loadQuotationByNo(quoteNo, asClone = false) {
+      const history = getLocalHistory();
+      const target = history.find(item => item.quoteNo === quoteNo);
+      if (!target) {
+        showToast('找不到該筆歷史報價單資料', 'error');
+        return;
+      }
+
+      document.getElementById('quoteNo').value = asClone ? generateDefaultQuoteNo() : target.quoteNo;
+      document.getElementById('quoteDate').value = asClone ? getFormattedDate(0) : (target.quoteDate || getFormattedDate(0));
+
+      if (target.seller) {
+        document.getElementById('sellerName').value = target.seller.name || '';
+        document.getElementById('sellerTaxId').value = target.seller.taxId || '';
+        document.getElementById('sellerContact').value = target.seller.contact || '';
+        document.getElementById('sellerPhone').value = target.seller.phone || '';
+        document.getElementById('sellerEmail').value = target.seller.email || '';
+        document.getElementById('bankName').value = target.seller.bankName || '';
+        document.getElementById('bankAccountName').value = target.seller.bankAccountName || '';
+        document.getElementById('bankAccountNo').value = target.seller.bankAccountNo || '';
+      }
+
+      if (target.buyer) {
+        document.getElementById('buyerName').value = target.buyer.name || '';
+        document.getElementById('buyerTaxId').value = target.buyer.taxId || '';
+        document.getElementById('buyerContact').value = target.buyer.contact || '';
+        document.getElementById('buyerPhone').value = target.buyer.phone || '';
+        document.getElementById('buyerAddress').value = target.buyer.address || '';
+      }
+
+      appState.items = JSON.parse(JSON.stringify(target.items || []));
+      document.getElementById('taxMode').value = target.taxMode || 'exclusive';
+      document.getElementById('discountAmount').value = clampNumber(target.discountAmount, 0, MAX_MONETARY_VALUE);
+      document.getElementById('notes').value = target.notes || '';
+
+      renderItemsEditor();
+      syncState();
+      toggleHistoryDrawer(false);
+      showToast(asClone ? `已複製 ${quoteNo} 建立新報價單` : `已載入報價單 ${quoteNo}`, 'success');
+    }
+
+    function cloneQuotationByNo(quoteNo) {
+      loadQuotationByNo(quoteNo, true);
+    }
+
+    /**
+     * 刪除報價單（已修正：雲端刪除失敗不再靜默吞掉，避免下次拉取復活）
+     */
+    function deleteQuotationByNo(quoteNo) {
+      const cloudCfg = getCloudConfig();
+      const cloudConnected = Boolean(cloudCfg.url && cloudCfg.secret);
+
+      openConfirmModal(
+        `確定要刪除報價單 ${quoteNo}？`,
+        cloudConnected
+          ? '系統將先從 Google 試算表刪除該筆單據，確認成功後同步移除本機紀錄，避免下次同步時還原。'
+          : '刪除後將從本機歷史紀錄移除（目前未啟用雲端同步，若雲端已有備份請先解鎖雲端再刪）。',
+        async () => {
+          if (cloudConnected) {
+            showToast(`正在從 Google 試算表刪除 ${quoteNo}...`, 'info');
+            try {
+              const result = await postToGas(cloudCfg.url, {
+                action: 'delete',
+                secret: cloudCfg.secret,
+                quoteNo: quoteNo
+              });
+              if (!result.ok) {
+                showToast(`雲端刪除失敗（${result.error || '驗證錯誤'}），已保留本機紀錄避免同步衝突`, 'error');
+                return;
+              }
+            } catch (err) {
+              console.error('雲端刪除請求失敗:', err);
+              showToast('連線 Google 試算表失敗，無法確認雲端刪除，已保留本機紀錄避免日後還原', 'error');
+              return;
+            }
+          }
+
+          const filtered = getLocalHistory().filter(item => item.quoteNo !== quoteNo);
+          setLocalHistory(filtered);
+          renderHistoryList();
+          showToast(cloudConnected ? `已同步刪除雲端與本機報價單 ${quoteNo}` : `已刪除本機報價單 ${quoteNo}`, 'success');
+        }
+      );
+    }
+
+    /**
+     * 本機歷史紀錄 JSON 備份匯出與還原（含 5MB / 1000 筆上限、Schema 驗證與 updatedAtISO 時間比對）
+     */
+    function exportHistoryBackup() {
+      const history = getLocalHistory();
+      if (history.length === 0) {
+        showToast('目前沒有可匯出的歷史報價單', 'error');
+        return;
+      }
+      const blob = new Blob([JSON.stringify(history, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `報價單歷史備份_${getFormattedDate(0)}.json`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+      showToast(`已匯出 ${history.length} 筆歷史報價單備份檔`, 'success');
+    }
+
+    function importHistoryBackup(event) {
+      const file = event.target.files[0];
+      event.target.value = '';
+      if (!file) return;
+
+      if (file.size > MAX_BACKUP_FILE_BYTES) {
+        showToast('JSON 備份檔超過 5MB 上限，無法匯入', 'error');
+        return;
+      }
+
+      const reader = new FileReader();
+      reader.onload = function (e) {
+        try {
+          const importedList = JSON.parse(e.target.result);
+          if (!Array.isArray(importedList)) throw new Error('JSON 根結構必須為陣列');
+
+          const sliced = importedList.slice(0, MAX_HISTORY_RECORDS);
+          const current = getLocalHistory();
+          const map = new Map();
+          current.forEach(item => map.set(item.quoteNo, item));
+
+          let appliedCount = 0;
+          let skippedInvalid = 0;
+          let keptNewerLocal = 0;
+
+          sliced.forEach(rawItem => {
+            if (!isValidRecord(rawItem)) {
+              skippedInvalid++;
+              return;
+            }
+            const cleanItem = sanitizeRecord(rawItem);
+            const existing = map.get(cleanItem.quoteNo);
+            if (!existing || (cleanItem.updatedAtISO || '') >= (existing.updatedAtISO || '')) {
+              map.set(cleanItem.quoteNo, cleanItem);
+              appliedCount++;
+            } else {
+              keptNewerLocal++;
+            }
+          });
+
+          const merged = Array.from(map.values())
+            .sort((a, b) => (b.updatedAtISO || '').localeCompare(a.updatedAtISO || ''))
+            .slice(0, MAX_HISTORY_RECORDS);
+
+          setLocalHistory(merged);
+          renderHistoryList();
+
+          let msg = `還原完成：套用 ${appliedCount} 筆`;
+          if (keptNewerLocal > 0) msg += `，保留本機較新 ${keptNewerLocal} 筆`;
+          if (skippedInvalid > 0) msg += `，略過格式不符 ${skippedInvalid} 筆`;
+          showToast(msg, appliedCount > 0 ? 'success' : 'info');
+        } catch (err) {
+          showToast('JSON 備份檔格式不正確，無法還原', 'error');
+        }
+      };
+      reader.readAsText(file, 'UTF-8');
+    }
+
+    /**
+     * 從 Google 試算表拉取歷史單據並依 updatedAtISO 時間戳記合併（避免舊版蓋掉本機新版）
+     */
+    async function pullFromGoogleSheets() {
+      const cloudCfg = getCloudConfig();
+      if (!cloudCfg.url || !cloudCfg.secret) {
+        showToast('請先在「雲端同步」輸入 Google Apps Script 網址與本次工作階段密碼', 'info');
+        openCloudModal();
+        return;
+      }
+
+      const btn = document.getElementById('btn-pull-cloud');
+      const origHtml = btn.innerHTML;
+      btn.disabled = true;
+      btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> 同步中...`;
+
+      try {
+        const result = await postToGas(cloudCfg.url, {
+          action: 'list',
+          secret: cloudCfg.secret
+        });
+        if (!result.ok) {
+          showToast(`同步失敗：${result.error || '驗證失敗'}`, 'error');
+          return;
+        }
+
+        const cloudList = Array.isArray(result.data) ? result.data.slice(0, MAX_HISTORY_RECORDS) : [];
+        const localList = getLocalHistory();
+        const map = new Map();
+        localList.forEach(item => map.set(item.quoteNo, item));
+
+        let updatedFromCloud = 0;
+        let keptNewerLocal = 0;
+        let skippedInvalid = 0;
+
+        cloudList.forEach(rawItem => {
+          if (!isValidRecord(rawItem)) {
+            skippedInvalid++;
+            return;
+          }
+          const cleanItem = sanitizeRecord(rawItem);
+          cleanItem.syncedToCloud = true;
+          const localItem = map.get(cleanItem.quoteNo);
+
+          if (!localItem || (cleanItem.updatedAtISO || '') >= (localItem.updatedAtISO || '')) {
+            map.set(cleanItem.quoteNo, cleanItem);
+            updatedFromCloud++;
+          } else {
+            keptNewerLocal++;
+          }
+        });
+
+        const merged = Array.from(map.values())
+          .sort((a, b) => (b.updatedAtISO || '').localeCompare(a.updatedAtISO || ''))
+          .slice(0, MAX_HISTORY_RECORDS);
+
+        setLocalHistory(merged);
+        renderHistoryList();
+
+        let msg = `雲端同步完成！更新 ${updatedFromCloud} 筆`;
+        if (keptNewerLocal > 0) msg += `，保留本機較新修改 ${keptNewerLocal} 筆`;
+        if (skippedInvalid > 0) msg += `，略過異常格式 ${skippedInvalid} 筆`;
+        showToast(msg, 'success');
+      } catch (err) {
+        console.error('從試算表拉取失敗:', err);
+        showToast(`連線 Google 試算表失敗：${err.message || '請確認網址與權限設定'}`, 'error');
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = origHtml;
+      }
+    }
+
+    /**
+     * 雲端設定 Modal 操作、隨機高強度密碼產生器與 GAS 程式碼複製
+     */
+    function openCloudModal() {
+      const cfg = getCloudConfig();
+      document.getElementById('cloud-gas-url').value = cfg.url || '';
+      document.getElementById('cloud-gas-secret').value = cfg.secret || '';
+      document.getElementById('cloud-modal').classList.remove('hidden');
+    }
+
+    function closeCloudModal() {
+      document.getElementById('cloud-modal').classList.add('hidden');
+    }
+
+    function generateStrongSecretHint() {
+      const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*_-';
+      const bytes = new Uint8Array(32);
+      crypto.getRandomValues(bytes);
+      let pwd = '';
+      for (let i = 0; i < bytes.length; i++) {
+        pwd += chars[bytes[i] % chars.length];
+      }
+      const input = document.getElementById('cloud-gas-secret');
+      input.type = 'text';
+      input.value = pwd;
+      input.focus();
+      input.select();
+      showToast('已產生 32 字元隨機高強度密碼，請妥善複製並填入 GAS 的 API_SECRET', 'info');
+    }
+
+    function clearCloudConfig() {
+      localStorage.removeItem(STORAGE_KEY_CLOUD_URL);
+      localStorage.removeItem(LEGACY_KEY_CLOUD);
+      sessionStorage.removeItem(SESSION_KEY_CLOUD_SECRET);
+      document.getElementById('cloud-gas-url').value = '';
+      document.getElementById('cloud-gas-secret').value = '';
+      updateCloudStatusIndicator();
+      showToast('已解除 Google 試算表雲端綁定並清除工作階段密碼', 'info');
+    }
+
+    async function saveAndTestCloudConfig() {
+      const url = document.getElementById('cloud-gas-url').value.trim();
+      const secret = document.getElementById('cloud-gas-secret').value.trim();
+
+      if (!url || !secret) {
+        showToast('請完整填寫 Web App 網址與管理員密碼', 'error');
+        return;
+      }
+
+      if (!isValidGasUrl(url)) {
+        showToast('網址格式不符：僅允許 https://script.google.com/macros/s/.../exec', 'error');
+        return;
+      }
+
+      const btn = document.getElementById('btn-test-cloud');
+      const origHtml = btn.innerHTML;
+      btn.disabled = true;
+      btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i><span>測試連線中...</span>`;
+
+      try {
+        const result = await postToGas(url, { action: 'test', secret: secret });
+        if (result.ok) {
+          // 僅將驗證過的網址存於 localStorage；密碼嚴格限存於 sessionStorage 不落地
+          localStorage.setItem(STORAGE_KEY_CLOUD_URL, url);
+          sessionStorage.setItem(SESSION_KEY_CLOUD_SECRET, secret);
+          document.getElementById('cloud-gas-secret').type = 'password';
+          updateCloudStatusIndicator();
+
+          const weakWarn = secret.length < 24 ? '（建議日後升級為 24 字元以上隨機密碼）' : '';
+          showToast(`${result.message || 'Google 試算表連線成功！'}${weakWarn}`, 'success');
+          closeCloudModal();
+        } else {
+          showToast(`連線驗證失敗：${result.error || '密碼不正確'}`, 'error');
+        }
+      } catch (err) {
+        console.error('測試連線失敗:', err);
+        showToast(`無法連線至該網址：${err.message || '請確認部署權限設定'}`, 'error');
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = origHtml;
+      }
+    }
+
+    async function copyGasBackendCode() {
+      const textarea = document.getElementById('gas-backend-code');
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          await navigator.clipboard.writeText(textarea.value);
+        } else {
+          textarea.select();
+          textarea.setSelectionRange(0, 99999);
+          document.execCommand('copy');
+        }
+        showToast('已複製 Google Apps Script 安全強化版後端程式碼！', 'success');
+      } catch (err) {
+        showToast('複製失敗，請手動全選複製程式碼', 'error');
+      }
+    }
+
+    /**
+     * 系統初始化入口
+     */
+    window.addEventListener('DOMContentLoaded', () => {
+      migrateLegacyCloudStorage();
+      bindHistoryListDelegation();
+      loadSellerFromStorage();
+      loadSampleData(true); // 初始化載入預設商業範本，方便立即體驗
+      updateHistoryBadge();
+      updateCloudStatusIndicator();
+      setupDragAndDrop();
+      updatePreviewScale();
+    });
+
+    window.addEventListener('resize', debounce(updatePreviewScale, 100));
+  </script>
+</body>
+</html>
